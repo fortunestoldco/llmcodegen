@@ -781,7 +781,7 @@ def clean_code_from_timestamps(code_text):
     clean_text = re.sub(r'\s+', ' ', clean_text)
     
     # Extract code blocks if present
-    code_pattern = r'```python(.*?)```'
+    code_pattern = r''''python(.*?)''''
     code_matches = re.findall(code_pattern, clean_text, re.DOTALL)
     
     if code_matches:
@@ -819,10 +819,10 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
         self.text += token
         
         # Look for code block markers
-        if "```python" in token or "```py" in token:
+        if "'''python" in token or "'''py" in token:
             self.in_code_block = True
             self.code_detected = True
-        elif self.in_code_block and "```" in token:
+        elif self.in_code_block and "'''" in token:
             self.in_code_block = False
         
         # If we're in a code block, collect the code
@@ -833,20 +833,20 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
         # If code is detected, show it properly formatted
         if self.code_detected:
             # Try to extract the code block
-            code_pattern = r'```(?:python|py)(.*?)```'
+            code_pattern = r''''(?:python|py)(.*?)''''
             code_matches = re.findall(code_pattern, self.text, re.DOTALL)
             
             if code_matches:
                 # Show the explanation text above the code block
-                explanation_text = self.text.split("```python")[0] if "```python" in self.text else self.text.split("```py")[0]
+                explanation_text = self.text.split("'''python")[0] if "'''python" in self.text else self.text.split("'''py")[0]
                 self.container.markdown(explanation_text)
                 
                 # Show the code in a dedicated code block with fixed height
                 self.container.code(code_matches[-1].strip(), language="python")
                 
                 # Show any text that follows the code block
-                if "```" in self.text:
-                    after_code = self.text.split("```")[-1]
+                if "'''" in self.text:
+                    after_code = self.text.split("'''")[-1]
                     if after_code.strip():
                         self.container.markdown(after_code)
             else:
@@ -859,7 +859,7 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
     def on_llm_end(self, response, **kwargs):
         # Final cleanup and processing
         # Extract code block if present
-        code_pattern = r'```(?:python|py)(.*?)```'
+        code_pattern = r''''(?:python|py)(.*?)''''
         code_matches = re.findall(code_pattern, self.text, re.DOTALL)
         
         if code_matches:
@@ -919,7 +919,7 @@ def generate_code_solution(task, vector_results, structured_docs):
         6. Verify that all functions and classes used are correctly imported
         7. Explicitly take import statements and correct use of modules from the documentation, not your training data
         
-        IMPORTANT: Always format your code with a proper ```python (code) ``` block for easier parsing.
+        IMPORTANT: Always format your code with a proper '''python (code) ''' block for easier parsing.
         
         YOUR SOLUTION (complete Python code):
         """
@@ -978,9 +978,9 @@ def generate_code_solution(task, vector_results, structured_docs):
         final_code = clean_code_from_timestamps(solution)
         
         # Check if the solution is wrapped in a code block
-        if not (final_code.startswith("```python") or final_code.startswith("```")):
+        if not (final_code.startswith("'''python") or final_code.startswith("'''")):
             # Wrap it in a code block for consistency
-            final_code = f"```python\n{final_code}\n```"
+            final_code = f"'''python\n{final_code}\n'''"
         
         # Update status
         update_progress("Code solution generated successfully!")
@@ -1196,7 +1196,7 @@ def process_feedback(feedback, original_solution):
     4. Ensure all imports and API usages are correct according to the documentation
     5. Provide the improved solution
     
-    IMPORTANT: Always format your code with a proper ```python (code) ``` block for easier parsing.
+    IMPORTANT: Always format your code with a proper '''python (code) ''' block for easier parsing.
     """
     
     # Handle different model types for feedback processing
@@ -1239,9 +1239,9 @@ def process_feedback(feedback, original_solution):
         final_code = clean_code_from_timestamps(improved_solution)
         
         # Check if the solution is wrapped in a code block
-        if not (final_code.startswith("```python") or final_code.startswith("```")):
+        if not (final_code.startswith("'''python") or final_code.startswith("'''")):
             # Wrap it in a code block for consistency
-            final_code = f"```python\n{final_code}\n```"
+            final_code = f"'''python\n{final_code}\n'''"
         
         update_progress("Feedback processed and solution improved successfully!")
         update_display_progress()
@@ -1283,7 +1283,7 @@ if st.session_state.progress_status:
 if st.session_state.code_solution:
     with st.expander("Generated Code Solution", expanded=True):
         # Extract code from markdown code blocks if present
-        code_pattern = r'```(?:python|py)(.*?)```'
+        code_pattern = r''''(?:python|py)(.*?)''''
         code_matches = re.findall(code_pattern, st.session_state.code_solution, re.DOTALL)
         
         if code_matches:
@@ -1371,4 +1371,4 @@ if st.button("Start New Task"):
     st.session_state.progress_status = ""
     st.session_state.progress_details = []
     st.rerun()
-```python
+'''python
