@@ -53,6 +53,8 @@ if "firecrawl_api_key" not in st.session_state:
     st.session_state.firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY", "")
 if "progress_status" not in st.session_state:
     st.session_state.progress_status = ""
+if "progress_details" not in st.session_state:
+    st.session_state.progress_details = []
 
 # Sidebar for configuration
 with st.sidebar:
@@ -339,23 +341,34 @@ def get_embeddings():
         st.error("OpenAI API Key is required for generating embeddings. Please provide it in the sidebar.")
         return None
 
+# Function to update progress with detailed information
+def update_progress(message, level="info"):
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    st.session_state.progress_status = message
+    st.session_state.progress_details.append({"time": timestamp, "message": message, "level": level})
+
 # Function to scrape the SDK documentation using Firecrawl or fallback to BeautifulSoup
 def scrape_documentation(url):
     # Update progress status
-    st.session_state.progress_status = f"Using Firecrawl to crawl {url}..."
+    update_progress(f"Starting documentation crawl for {url}...")
     
     # Try to use Firecrawl if API key is available
     if st.session_state.firecrawl_api_key:
         try:
+            update_progress(f"Using Firecrawl to crawl {url}...")
+            
             loader = FireCrawlLoader(
                 api_key=st.session_state.firecrawl_api_key,
                 url=url,
                 mode="crawl"  # Use crawl mode to get all accessible subpages
             )
             
+            update_progress(f"Firecrawl initiated for {url}. Retrieving content...")
             docs = loader.load()
             
             if docs:
+                update_progress(f"Successfully retrieved {len(docs)} documents from Firecrawl")
+                
                 # Extract library name and version from the first document's metadata
                 library_name = "Unknown"
                 library_version = "Latest"
@@ -377,12 +390,12 @@ def scrape_documentation(url):
                 
                 return documentation, docs
             else:
-                st.session_state.progress_status = f"Firecrawl returned no documents for {url}. Falling back to basic scraping."
+                update_progress(f"Firecrawl returned no documents for {url}. Falling back to basic scraping.", "warning")
                 # Fall back to basic scraping
                 return fallback_scrape_documentation(url)
                 
         except Exception as e:
-            st.session_state.progress_status = f"Error using Firecrawl: {e}. Falling back to basic scraping."
+            update_progress(f"Error using Firecrawl: {e}. Falling back to basic scraping.", "error")
             # Fall back to basic scraping
             return fallback_scrape_documentation(url)
     else:
@@ -392,14 +405,16 @@ def scrape_documentation(url):
 # Fallback scraping function using BeautifulSoup
 def fallback_scrape_documentation(url):
     try:
-        st.session_state.progress_status = f"Scraping documentation from {url} using BeautifulSoup..."
+        update_progress(f"Scraping documentation from {url} using BeautifulSoup...")
         response = requests.get(url)
         response.raise_for_status()
         
+        update_progress(f"Successfully retrieved page content from {url}")
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Extract all text content
         content = soup.get_text()
+        update_progress(f"Extracted text content from {url}")
         
         # Process HTML content to extract structured information
         # This is a simplified version - a more robust implementation would parse 
@@ -422,6 +437,7 @@ def fallback_scrape_documentation(url):
         modules = []
         imports = []
         
+        update_progress(f"Looking for import statements and modules in {url}")
         # Look for import statements in code blocks
         code_blocks = soup.find_all(['pre', 'code'])
         for block in code_blocks:
@@ -441,6 +457,7 @@ def fallback_scrape_documentation(url):
         # For a comprehensive solution, we would need to parse the specific HTML structure
         
         # Create sections based on heading hierarchy
+        update_progress(f"Parsing document structure from {url}")
         headings = soup.find_all(['h1', 'h2', 'h3', 'h4'])
         current_module = None
         
@@ -505,6 +522,8 @@ def fallback_scrape_documentation(url):
                     
                     current_module["functions"].append(new_function)
         
+        update_progress(f"Found {len(modules)} modules and {len(imports)} import statements")
+        
         # Create the final documentation object
         documentation = {
             "library": library_name,
@@ -515,6 +534,7 @@ def fallback_scrape_documentation(url):
         }
         
         # Also create a list of text chunks for vector storage
+        update_progress(f"Splitting content into chunks for vector storage")
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200
@@ -536,16 +556,17 @@ def fallback_scrape_documentation(url):
             for i, chunk in enumerate(chunks)
         ]
         
+        update_progress(f"Created {len(docs)} document chunks from {url}")
         return documentation, docs
     
     except Exception as e:
-        st.session_state.progress_status = f"Error scraping documentation: {e}"
+        update_progress(f"Error scraping documentation: {e}", "error")
         return None, None
 
 # Function to store documentation (MongoDB or Chroma)
 def store_documentation(client, documentation, vector_docs):
     try:
-        st.session_state.progress_status = "Storing documentation in vector database..."
+        update_progress("Storing documentation in vector database...")
         vector_store_type = get_vector_store_type()
         
         # Get embeddings
@@ -567,18 +588,21 @@ def store_documentation(client, documentation, vector_docs):
             
             if existing:
                 # Update existing document
+                update_progress(f"Updating existing documentation for {documentation['library']}")
                 doc_collection.update_one(
                     {"_id": existing["_id"]},
                     {"$set": documentation}
                 )
             else:
                 # Insert new document
+                update_progress(f"Inserting new documentation for {documentation['library']}")
                 doc_collection.insert_one(documentation)
             
             # Store vector documents
             vector_collection = db['vector_docs']
             
             # Create the vector store
+            update_progress(f"Creating vector embeddings for {len(vector_docs)} documents")
             vector_store = MongoDBAtlasVectorSearch.from_documents(
                 vector_docs,
                 embeddings,
@@ -592,11 +616,13 @@ def store_documentation(client, documentation, vector_docs):
             os.makedirs(structured_docs_path, exist_ok=True)
             
             # Generate a unique filename based on library and version
+            update_progress(f"Storing structured documentation for {documentation['library']}")
             filename = f"{documentation['library']}_{documentation['version']}.json"
             with open(os.path.join(structured_docs_path, filename), 'w') as f:
                 json.dump(documentation, f)
             
             # Store vector documents in Chroma
+            update_progress(f"Creating vector embeddings with Chroma for {len(vector_docs)} documents")
             vector_store = Chroma.from_documents(
                 documents=vector_docs,
                 embedding=embeddings,
@@ -604,16 +630,17 @@ def store_documentation(client, documentation, vector_docs):
             )
             vector_store.persist()
         
+        update_progress("Documentation stored successfully!")
         return True
     
     except Exception as e:
-        st.session_state.progress_status = f"Error storing documentation: {e}"
+        update_progress(f"Error storing documentation: {e}", "error")
         return False
 
 # Function to search for documentation (MongoDB or Chroma)
 def search_documentation(client, query, library=None):
     try:
-        st.session_state.progress_status = f"Searching documentation for '{query}'..."
+        update_progress(f"Searching documentation for '{query}'...")
         vector_store_type = get_vector_store_type()
         
         # Get embeddings
@@ -639,6 +666,7 @@ def search_documentation(client, query, library=None):
             
             # Search for similar documents
             results = vector_store.similarity_search(query, k=10, pre_filter=search_filter)
+            update_progress(f"Found {len(results)} relevant document chunks")
             
             # Also get the structured documentation
             structured_collection = db['structured_docs']
@@ -647,10 +675,12 @@ def search_documentation(client, query, library=None):
             structured_docs = list(structured_collection.find(
                 {"library": library} if library else {}
             ))
+            update_progress(f"Found {len(structured_docs)} structured documentation entries")
         else:
             # Use Chroma for local vector search
             # Load vector store
             try:
+                update_progress("Loading local Chroma vector store")
                 vector_store = Chroma(
                     persist_directory=os.path.join(st.session_state.chroma_db_path, "vector_store"),
                     embedding_function=embeddings
@@ -658,19 +688,23 @@ def search_documentation(client, query, library=None):
                 
                 # Search for similar documents, filter by library if provided
                 if library:
+                    update_progress(f"Searching for '{query}' with library filter: {library}")
                     results = vector_store.similarity_search(
                         query=query,
                         k=10,
                         filter={"library": library}
                     )
                 else:
+                    update_progress(f"Searching for '{query}' across all libraries")
                     results = vector_store.similarity_search(query, k=10)
+                update_progress(f"Found {len(results)} relevant document chunks")
                 
                 # Get structured documentation
                 structured_docs = []
                 structured_docs_path = os.path.join(st.session_state.chroma_db_path, "structured_docs")
                 
                 if os.path.exists(structured_docs_path):
+                    update_progress("Loading structured documentation from local files")
                     for filename in os.listdir(structured_docs_path):
                         if filename.endswith('.json'):
                             if library and not filename.startswith(f"{library}_"):
@@ -679,15 +713,16 @@ def search_documentation(client, query, library=None):
                             with open(os.path.join(structured_docs_path, filename), 'r') as f:
                                 doc = json.load(f)
                                 structured_docs.append(doc)
+                    update_progress(f"Found {len(structured_docs)} structured documentation entries")
             except Exception as e:
-                st.session_state.progress_status = f"Error loading Chroma vector store: {e}. Creating a new one."
+                update_progress(f"Error loading Chroma vector store: {e}. Creating a new one.", "warning")
                 results = []
                 structured_docs = []
         
         return results, structured_docs
     
     except Exception as e:
-        st.session_state.progress_status = f"Error searching documentation: {e}"
+        update_progress(f"Error searching documentation: {e}", "error")
         return [], []
 
 # Function to clean code from timestamp markers
@@ -760,7 +795,7 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
                 explanation_text = self.text.split("```python")[0] if "```python" in self.text else self.text.split("```py")[0]
                 self.container.markdown(explanation_text)
                 
-                # Show the code in a dedicated code block
+                # Show the code in a dedicated code block with fixed height
                 self.container.code(code_matches[-1].strip(), language="python")
                 
                 # Show any text that follows the code block
@@ -792,24 +827,29 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
 # Function to generate code solution using the selected model
 def generate_code_solution(task, vector_results, structured_docs):
     try:
-        st.session_state.progress_status = "Generating code solution..."
+        update_progress("Generating code solution...")
         
         # Extract library name from structured docs for parameter optimization
         sdk_name = "Unknown"
         if structured_docs and len(structured_docs) > 0:
             if "library" in structured_docs[0]:
                 sdk_name = structured_docs[0]["library"]
+                update_progress(f"Optimizing model parameters for {sdk_name} SDK")
 
         # Format the vector chunks
         vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
+        update_progress(f"Prepared {len(vector_results)} documentation chunks for context")
         
         # Format the structured docs
         structured_docs_str = json.dumps(structured_docs, indent=2)
+        update_progress(f"Prepared structured documentation for {len(structured_docs)} libraries")
         
         # Get the optimized LLM with task-specific parameters
+        update_progress(f"Initializing {llm_provider} for code generation")
         llm = get_llm(llm_provider, task=task, sdk_name=sdk_name)
         
         if not llm:
+            update_progress("Could not initialize the language model. Please check your API keys.", "error")
             return "Error: Could not initialize the language model. Please check your API keys."
         
         # Create the code generation prompt
@@ -838,6 +878,8 @@ def generate_code_solution(task, vector_results, structured_docs):
         YOUR SOLUTION (complete Python code):
         """
         
+        update_progress("Sending request to the model. This may take a moment...")
+        
         # Create a placeholder for streaming output
         code_container = st.empty()
         
@@ -854,6 +896,7 @@ def generate_code_solution(task, vector_results, structured_docs):
             ]
             # Set up callbacks for streaming
             llm.callbacks = [streaming_handler]
+            update_progress("Generating code with HuggingFace model...")
             ai_msg = llm.invoke(code_messages)
             solution = ai_msg.content
             
@@ -869,6 +912,7 @@ def generate_code_solution(task, vector_results, structured_docs):
             
             # Use invoke and collect the full response
             llm.callbacks = [streaming_handler]
+            update_progress("Generating code with Replicate model...")
             response = llm.invoke(formatted_prompt)
             solution = response  # The response is already the string content
             
@@ -880,6 +924,7 @@ def generate_code_solution(task, vector_results, structured_docs):
             ]
             # Enable streaming
             llm.callbacks = [streaming_handler]
+            update_progress(f"Generating code with {llm_provider}...")
             response = llm.invoke(code_messages)
             solution = response.content
         
@@ -892,12 +937,12 @@ def generate_code_solution(task, vector_results, structured_docs):
             final_code = f"```python\n{final_code}\n```"
         
         # Update status
-        st.session_state.progress_status = "Code solution generated successfully!"
+        update_progress("Code solution generated successfully!")
         
         return final_code
     
     except Exception as e:
-        st.session_state.progress_status = f"Error generating solution: {e}"
+        update_progress(f"Error generating solution: {e}", "error")
         return f"Error generating solution: {e}"
 
 # Function to extract URLs from text
@@ -928,99 +973,131 @@ def extract_task(text, urls):
 def process_request(request):
     progress_placeholder = st.empty()
     
-    def update_progress():
+    def update_display_progress():
+        # Display the current progress status
         progress_placeholder.info(st.session_state.progress_status)
+        
+    # Clear previous progress details
+    st.session_state.progress_details = []
     
     vector_store_type = get_vector_store_type()
     client = None
     
     if vector_store_type == "mongodb":
+        update_progress("Connecting to MongoDB database...")
         client = get_mongodb_connection()
         if not client:
-            st.session_state.progress_status = "Failed to connect to the database. Please try again."
-            update_progress()
+            update_progress("Failed to connect to the database. Please try again.", "error")
+            update_display_progress()
             return "Failed to connect to the database. Please try again."
     
     # Extract URLs from the request
     urls = extract_urls(request)
     
     if not urls:
-        st.session_state.progress_status = "Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation."
-        update_progress()
+        update_progress("Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation.", "error")
+        update_display_progress()
         return "Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation."
     
     # Extract task from the request
     task = extract_task(request, urls)
     
     if not task:
-        st.session_state.progress_status = "Could not identify the task in your request. Please describe what you want to build."
-        update_progress()
+        update_progress("Could not identify the task in your request. Please describe what you want to build.", "error")
+        update_display_progress()
         return "Could not identify the task in your request. Please describe what you want to build."
+    
+    update_progress(f"Processing task: '{task}' with {len(urls)} documentation URLs")
+    update_display_progress()
     
     # Process each URL
     all_vector_results = []
     all_structured_docs = []
     
-    for url in urls:
+    for i, url in enumerate(urls):
         # Extract library name from URL if possible
         library_match = re.search(r'//([^/]+\.)?([^./]+)\.(io|com|org)', url)
         library = library_match.group(2) if library_match else None
         
         # Check if we already have documentation for this library
-        st.session_state.progress_status = f"Checking for existing documentation for {library if library else 'unknown library'}..."
-        update_progress()
+        update_progress(f"[URL {i+1}/{len(urls)}] Checking for existing documentation for {library if library else 'unknown library'}...")
+        update_display_progress()
+        
         vector_results, structured_docs = search_documentation(client, task, library)
         
         # If we don't have enough relevant results, scrape the documentation
         if len(vector_results) < 3 or not structured_docs:
-            st.session_state.progress_status = f"Getting SDK documentation from {url}..."
-            update_progress()
+            update_progress(f"[URL {i+1}/{len(urls)}] Insufficient existing documentation. Getting new documentation from {url}...")
+            update_display_progress()
             
             # Use FireCrawl or fallback to BeautifulSoup
             documentation, vector_docs = scrape_documentation(url)
-            update_progress()  # Update with the latest status
+            update_display_progress()  # Update with the latest status
             
             if documentation and vector_docs:
-                st.session_state.progress_status = f"Storing documentation from {url}..."
-                update_progress()
+                update_progress(f"[URL {i+1}/{len(urls)}] Storing documentation from {url}...")
+                update_display_progress()
+                
                 store_result = store_documentation(client, documentation, vector_docs)
                 
                 if store_result:
-                    st.session_state.progress_status = f"Documentation from {url} processed and stored successfully!"
+                    update_progress(f"[URL {i+1}/{len(urls)}] Documentation from {url} processed and stored successfully!")
                 else:
-                    st.session_state.progress_status = f"Documentation from {url} was processed but could not be stored completely."
-                update_progress()
+                    update_progress(f"[URL {i+1}/{len(urls)}] Documentation from {url} was processed but could not be stored completely.", "warning")
+                update_display_progress()
                 
                 # Search again with the new documentation
-                st.session_state.progress_status = f"Searching documentation for '{task}'..."
-                update_progress()
+                update_progress(f"[URL {i+1}/{len(urls)}] Searching newly stored documentation for '{task}'...")
+                update_display_progress()
+                
                 vector_results, structured_docs = search_documentation(client, task, library)
         
         # Add results to our collections
         all_vector_results.extend(vector_results)
         all_structured_docs.extend(structured_docs)
+        
+        update_progress(f"[URL {i+1}/{len(urls)}] Successfully processed documentation for {library if library else 'unknown library'}")
+        update_display_progress()
     
     # Generate the code solution
-    st.session_state.progress_status = "Generating code solution..."
-    update_progress()
+    update_progress(f"All documentation processed. Generating code solution for: {task}")
+    update_display_progress()
+    
     solution = generate_code_solution(task, all_vector_results, all_structured_docs)
     
     if client:
         client.close()
+    
+    update_progress("Task completed!")
+    update_display_progress()
+    
     return solution
 
 # Function to handle feedback and corrections
 def process_feedback(feedback, original_solution):
+    # Clear previous progress details
+    st.session_state.progress_details = []
+    progress_placeholder = st.empty()
+    
+    def update_display_progress():
+        # Display the current progress status
+        progress_placeholder.info(st.session_state.progress_status)
+    
     vector_store_type = get_vector_store_type()
     client = None
     
     if vector_store_type == "mongodb":
+        update_progress("Connecting to MongoDB database...")
         client = get_mongodb_connection()
         if not client:
+            update_progress("Failed to connect to the database. Please try again.", "error")
+            update_display_progress()
             return "Failed to connect to the database. Please try again."
     
     # Re-search documentation based on the feedback
-    st.session_state.progress_status = f"Processing feedback: '{feedback}'..."
+    update_progress(f"Processing feedback: '{feedback}'...")
+    update_display_progress()
+    
     vector_results, structured_docs = search_documentation(client, feedback)
     
     # Extract library name from structured docs for parameter optimization
@@ -1030,9 +1107,14 @@ def process_feedback(feedback, original_solution):
             sdk_name = structured_docs[0]["library"]
     
     # Get the selected model with optimal parameters
+    update_progress(f"Initializing {llm_provider} for feedback processing...")
+    update_display_progress()
+    
     llm = get_llm(llm_provider, task=feedback, sdk_name=sdk_name)
     
     if not llm:
+        update_progress("Could not initialize the language model. Please check your API keys.", "error")
+        update_display_progress()
         return "Error: Could not initialize the language model. Please check your API keys."
     
     # Format the vector chunks and structured docs
@@ -1075,6 +1157,9 @@ def process_feedback(feedback, original_solution):
     improved_solution = ""
     
     try:
+        update_progress("Generating improved solution based on feedback...")
+        update_display_progress()
+        
         if isinstance(llm, ChatHuggingFace):
             messages = [
                 SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
@@ -1112,16 +1197,32 @@ def process_feedback(feedback, original_solution):
             # Wrap it in a code block for consistency
             final_code = f"```python\n{final_code}\n```"
         
+        update_progress("Feedback processed and solution improved successfully!")
+        update_display_progress()
+        
         if client:
             client.close()
         
         return final_code
         
     except Exception as e:
-        st.session_state.progress_status = f"Error processing feedback: {e}"
+        update_progress(f"Error processing feedback: {e}", "error")
+        update_display_progress()
+        
         if client:
             client.close()
         return f"Error processing feedback: {e}"
+
+# Display progress details
+if st.session_state.progress_details:
+    with st.expander("Progress Log", expanded=False):
+        for detail in st.session_state.progress_details:
+            if detail["level"] == "error":
+                st.error(f"{detail['time']} - {detail['message']}")
+            elif detail["level"] == "warning":
+                st.warning(f"{detail['time']} - {detail['message']}")
+            else:
+                st.info(f"{detail['time']} - {detail['message']}")
 
 # Chat message display
 for message in st.session_state.messages:
@@ -1140,11 +1241,34 @@ if st.session_state.code_solution:
         code_matches = re.findall(code_pattern, st.session_state.code_solution, re.DOTALL)
         
         if code_matches:
-            # Display the code part only
+            # Display the code part only with fixed height
+            st.markdown("""
+            <style>
+            .fixed-height-code {
+                height: 400px;
+                overflow: auto;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Use the fixed height class for the code block
+            st.markdown('<div class="fixed-height-code">', unsafe_allow_html=True)
             st.code(code_matches[0].strip(), language="python")
+            st.markdown('</div>', unsafe_allow_html=True)
         else:
-            # If no code block markers, display as is
+            # If no code block markers, display as is with fixed height
+            st.markdown("""
+            <style>
+            .fixed-height-code {
+                height: 400px;
+                overflow: auto;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.markdown('<div class="fixed-height-code">', unsafe_allow_html=True)
             st.code(clean_code_from_timestamps(st.session_state.code_solution), language="python")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # User input area
 if prompt := st.chat_input("What would you like me to build?"):
@@ -1167,6 +1291,7 @@ if prompt := st.chat_input("What would you like me to build?"):
         
         if is_feedback:
             # Process feedback
+            message_placeholder.markdown("I'm processing your feedback...")
             response = process_feedback(prompt, st.session_state.code_solution)
             st.session_state.code_solution = response
             message_placeholder.markdown("I've updated the solution based on your feedback. Check the code panel above.")
@@ -1198,4 +1323,5 @@ if st.button("Start New Task"):
     st.session_state.messages = []
     st.session_state.code_solution = ""
     st.session_state.progress_status = ""
+    st.session_state.progress_details = []
     st.rerun()
