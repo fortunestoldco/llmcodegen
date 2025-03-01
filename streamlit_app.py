@@ -317,7 +317,7 @@ def create_structured_docs_indexes(db, collection_name):
             background=True
         )
         
-        # TTL index for automatic cleanup
+        # Supporting indexes
         db[collection_name].create_index(
             [("last_updated", pymongo.ASCENDING)],
             expireAfterSeconds=7776000,  # 90 days
@@ -394,26 +394,42 @@ def get_mongodb_connection():
             
             # Check if collections exist, if not create them
             if mongo_structured_collection not in db.list_collection_names():
-                # Create structured docs collection with default _id clustering
+                # Structured docs collection - simple clustered index on _id
                 db.create_collection(
                     mongo_structured_collection,
                     clusteredIndex={
                         "key": { "_id": 1 },
-                        "unique": True  # Required field for clustered index
+                        "unique": True
                     }
+                )
+                
+                # Add compound index for efficient lookups
+                db[mongo_structured_collection].create_index(
+                    [
+                        ("library", pymongo.ASCENDING),
+                        ("version", pymongo.ASCENDING)
+                    ],
+                    unique=True,
+                    background=True
                 )
             
             if mongo_vector_collection not in db.list_collection_names():
-                # Create vector docs collection with default _id clustering and capped size
+                # Vector docs collection - simple clustered index on _id
                 db.create_collection(
                     mongo_vector_collection,
-                    capped=True,
-                    size=5368709120,  # 5GB
-                    max=1000000,      # 1 million documents
                     clusteredIndex={
                         "key": { "_id": 1 },
-                        "unique": True  # Required field for clustered index
+                        "unique": True
                     }
+                )
+                
+                # Add compound index for metadata filtering
+                db[mongo_vector_collection].create_index(
+                    [
+                        ("metadata.library", pymongo.ASCENDING),
+                        ("metadata.version", pymongo.ASCENDING)
+                    ],
+                    background=True
                 )
             
             # Create standard indexes for efficient querying
