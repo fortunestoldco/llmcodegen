@@ -23,13 +23,13 @@ import time
 import getpass
 
 # Set page config
-st.set_page_config(page_title="Other Tales CodeGen", page_icon="🧩", layout="wide")
+st.set_page_config(page_title="Other Tales CodeMaker", page_icon="🧩", layout="wide")
 
 # App title and description
-st.title("SDK Code Generator")
+st.title("Other Tales CodeMaker")
 st.markdown("""
-This tool helps you generate Python code solutions, checking it against the latest SDK documentation. 
-Simply provide your task along with the SDK URL(s) you want to use.
+This tool helps you generate and verify code solutions, ensuring compliance with SDK documentation. 
+Simply provide your task along with the SDK/API Documentation URL(s) you want to use.
 """)
 
 # Initialize session state variables
