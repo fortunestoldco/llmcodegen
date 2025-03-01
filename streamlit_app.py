@@ -310,19 +310,65 @@ def get_vector_store_type():
 # MongoDB connection setup
 def get_mongodb_connection():
     try:
-        # Check if MongoDB URI is available
         vector_store_type = get_vector_store_type()
         if vector_store_type == "mongodb":
-            # Use environment variables for production or secrets for local development
+            # Use environment variables for all MongoDB settings
             try:
                 mongo_uri = os.getenv("MONGODB_URI", st.secrets["mongodb"]["uri"])
+                # Get database and collection names from environment variables
+                mongo_db_name = os.getenv("MONGODB_DATABASE", "sdk_documentation")
+                mongo_structured_collection = os.getenv("MONGODB_STRUCTURED_COLLECTION", "structured_docs")
+                mongo_vector_collection = os.getenv("MONGODB_VECTOR_COLLECTION", "vector_docs")
+                mongo_vector_index = os.getenv("MONGODB_VECTOR_INDEX", "vector_index")
             except:
                 mongo_uri = os.getenv("MONGODB_URI")
+                mongo_db_name = os.getenv("MONGODB_DATABASE", "sdk_documentation")
+                mongo_structured_collection = os.getenv("MONGODB_STRUCTURED_COLLECTION", "structured_docs")
+                mongo_vector_collection = os.getenv("MONGODB_VECTOR_COLLECTION", "vector_docs")
+                mongo_vector_index = os.getenv("MONGODB_VECTOR_INDEX", "vector_index")
                 
             client = pymongo.MongoClient(mongo_uri, server_api=ServerApi('1'))
             
+            # Store the configuration in the session state for reuse
+            st.session_state.mongodb_config = {
+                "database": mongo_db_name,
+                "structured_collection": mongo_structured_collection,
+                "vector_collection": mongo_vector_collection,
+                "vector_index": mongo_vector_index
+            }
+            
             # Ping the database to confirm connection
             client.admin.command('ping')
+            
+            # Initialize collections with proper configurations
+            db = client[mongo_db_name]
+            
+            # Check if collections exist, if not create them
+            if mongo_structured_collection not in db.list_collection_names():
+                db.create_collection(
+                    mongo_structured_collection,
+                    clusteredIndex={
+                        "key": { "library": 1, "version": 1 },
+                        "unique": True
+                    },
+                    timeseries={
+                        "timeField": "last_updated",
+                        "metaField": "library",
+                        "granularity": "hours"
+                    }
+                )
+            
+            if mongo_vector_collection not in db.list_collection_names():
+                db.create_collection(
+                    mongo_vector_collection,
+                    capped=True,
+                    size=5368709120,
+                    max=1000000,
+                    clusteredIndex={
+                        "key": { "metadata.library": 1, "metadata.version": 1 }
+                    }
+                )
+            
             st.session_state.db_connection_error = None
             return client
         else:
@@ -575,10 +621,12 @@ def store_documentation(client, documentation, vector_docs):
             return False
             
         if vector_store_type == "mongodb":
-            db = client['sdk_documentation']
+            # Use configuration from session state
+            config = st.session_state.mongodb_config
+            db = client[config["database"]]
             
             # Store the structured documentation
-            doc_collection = db['structured_docs']
+            doc_collection = db[config["structured_collection"]]
             
             # Check if we already have this library version
             existing = doc_collection.find_one({
@@ -587,19 +635,17 @@ def store_documentation(client, documentation, vector_docs):
             })
             
             if existing:
-                # Update existing document
                 update_progress(f"Updating existing documentation for {documentation['library']}")
                 doc_collection.update_one(
                     {"_id": existing["_id"]},
                     {"$set": documentation}
                 )
             else:
-                # Insert new document
                 update_progress(f"Inserting new documentation for {documentation['library']}")
                 doc_collection.insert_one(documentation)
             
             # Store vector documents
-            vector_collection = db['vector_docs']
+            vector_collection = db[config["vector_collection"]]
             
             # Create the vector store
             update_progress(f"Creating vector embeddings for {len(vector_docs)} documents")
@@ -607,7 +653,7 @@ def store_documentation(client, documentation, vector_docs):
                 vector_docs,
                 embeddings,
                 collection=vector_collection,
-                index_name="vector_index",
+                index_name=config["vector_index"],
             )
         else:
             # Use Chroma for local vector storage
@@ -1325,3 +1371,4 @@ if st.button("Start New Task"):
     st.session_state.progress_status = ""
     st.session_state.progress_details = []
     st.rerun()
+```python
