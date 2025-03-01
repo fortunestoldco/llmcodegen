@@ -414,7 +414,7 @@ def get_mongodb_connection():
                 )
             
             if mongo_vector_collection not in db.list_collection_names():
-                # Vector docs collection - simple clustered index on _id
+                # Vector docs collection - simple clustered index on _id and TTL index
                 db.create_collection(
                     mongo_vector_collection,
                     clusteredIndex={
@@ -427,7 +427,8 @@ def get_mongodb_connection():
                 db[mongo_vector_collection].create_index(
                     [
                         ("metadata.library", pymongo.ASCENDING),
-                        ("metadata.version", pymongo.ASCENDING)
+                        ("metadata.version", pymongo.ASCENDING),
+                        ("metadata.timestamp", pymongo.ASCENDING)
                     ],
                     background=True
                 )
@@ -664,7 +665,8 @@ def fallback_scrape_documentation(url):
                     "library": library_name,
                     "version": library_version,
                     "source": url,
-                    "chunk_id": i
+                    "chunk_id": i,
+                    "timestamp": datetime.datetime.utcnow()  # Add timestamp field
                 }
             )
             for i, chunk in enumerate(chunks)
