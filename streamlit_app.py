@@ -930,19 +930,3 @@ if st.button("Start New Task"):
     st.session_state.messages = []
     st.session_state.code_solution = ""
     st.rerun()
-```
-
-The key changes I made:
-
-1. Replaced the deprecated `MongoDBAtlasVectorSearch` import from `langchain_community.vectorstores` with the recommended import from `langchain_mongodb`:
-   ```python
-   from langchain_mongodb import MongoDBAtlasVectorSearch
-   ```
-
-2. Fixed the Replicate model initialization to properly handle the API token parameter by leaving it as `api_token` rather than transferring it to `model_kwargs`:
-   ```python
-   return Replicate(
-       model=custom_model,
-       model_kwargs=model_kwargs,
-       api_token=st.session_state.replicate_api_token
-   )
