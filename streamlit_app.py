@@ -17,6 +17,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_community.document_loaders.firecrawl import FireCrawlLoader
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 import time
 import getpass
 
@@ -47,6 +49,8 @@ if "replicate_api_token" not in st.session_state:
     st.session_state.replicate_api_token = os.environ.get("REPLICATE_API_TOKEN", "")
 if "huggingface_api_token" not in st.session_state:
     st.session_state.huggingface_api_token = os.environ.get("HUGGINGFACEHUB_API_TOKEN", "")
+if "firecrawl_api_key" not in st.session_state:
+    st.session_state.firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY", "")
 
 # Sidebar for configuration
 with st.sidebar:
@@ -82,7 +86,7 @@ with st.sidebar:
             "OpenAI API Key", 
             value=st.session_state.openai_api_key,
             type="password",
-            help="Required for OpenAI models"
+            help="Required for OpenAI models and embeddings"
         )
         if openai_api_key:
             st.session_state.openai_api_key = openai_api_key
@@ -120,6 +124,17 @@ with st.sidebar:
         if huggingface_api_token:
             st.session_state.huggingface_api_token = huggingface_api_token
             os.environ["HUGGINGFACEHUB_API_TOKEN"] = huggingface_api_token
+            
+        # Firecrawl API Key
+        firecrawl_api_key = st.text_input(
+            "Firecrawl API Key", 
+            value=st.session_state.firecrawl_api_key,
+            type="password",
+            help="Optional: Enhanced web crawling and scraping capabilities"
+        )
+        if firecrawl_api_key:
+            st.session_state.firecrawl_api_key = firecrawl_api_key
+            os.environ["FIRECRAWL_API_KEY"] = firecrawl_api_key
 
 # Function to determine optimal model parameters for code generation
 def determine_optimal_parameters(provider, sdk_name):
@@ -243,10 +258,13 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
             "top_p": params.get("top_p", 1)
         }
         
-        # Fix: Keep api_token separate from model_kwargs to match the expected API
+        # Fix: Create a Replicate instance with streaming callback
+        # This ensures the full response is properly captured
         return Replicate(
             model=custom_model,
             model_kwargs=model_kwargs,
+            streaming=True,
+            callbacks=[StreamingStdOutCallbackHandler()],
             api_token=st.session_state.replicate_api_token
         )
         
@@ -308,8 +326,64 @@ def get_mongodb_connection():
         st.error(f"Failed to connect to MongoDB: {e}")
         return None
 
-# Function to scrape the SDK documentation
+# Function to get embeddings based on available API keys
+def get_embeddings():
+    if st.session_state.openai_api_key:
+        return OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
+    else:
+        st.error("OpenAI API Key is required for generating embeddings. Please provide it in the sidebar.")
+        return None
+
+# Function to scrape the SDK documentation using Firecrawl or fallback to BeautifulSoup
 def scrape_documentation(url):
+    # Try to use Firecrawl if API key is available
+    if st.session_state.firecrawl_api_key:
+        try:
+            st.info(f"Using Firecrawl to crawl {url}...")
+            loader = FireCrawlLoader(
+                api_key=st.session_state.firecrawl_api_key,
+                url=url,
+                mode="crawl"  # Use crawl mode to get all accessible subpages
+            )
+            
+            docs = loader.load()
+            
+            if docs:
+                # Extract library name and version from the first document's metadata
+                library_name = "Unknown"
+                library_version = "Latest"
+                
+                if "title" in docs[0].metadata:
+                    title_text = docs[0].metadata["title"]
+                    match = re.search(r'([\w\-]+)', title_text)
+                    if match:
+                        library_name = match.group(1)
+                
+                # Create the documentation object
+                documentation = {
+                    "library": library_name,
+                    "version": library_version,
+                    "modules": [],
+                    "imports": [],
+                    "last_updated": datetime.datetime.now().isoformat()
+                }
+                
+                return documentation, docs
+            else:
+                st.warning(f"Firecrawl returned no documents for {url}. Falling back to basic scraping.")
+                # Fall back to basic scraping
+                return fallback_scrape_documentation(url)
+                
+        except Exception as e:
+            st.warning(f"Error using Firecrawl: {e}. Falling back to basic scraping.")
+            # Fall back to basic scraping
+            return fallback_scrape_documentation(url)
+    else:
+        # Fall back to basic scraping if no Firecrawl API key
+        return fallback_scrape_documentation(url)
+
+# Fallback scraping function using BeautifulSoup
+def fallback_scrape_documentation(url):
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -465,13 +539,11 @@ def store_documentation(client, documentation, vector_docs):
     try:
         vector_store_type = get_vector_store_type()
         
-        # Check if we have an OpenAI API key for embeddings
-        if not st.session_state.openai_api_key:
-            st.error("OpenAI API Key is required for generating embeddings. Please provide it in the sidebar.")
+        # Get embeddings
+        embeddings = get_embeddings()
+        if not embeddings:
             return False
             
-        embeddings = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
-        
         if vector_store_type == "mongodb":
             db = client['sdk_documentation']
             
@@ -534,13 +606,11 @@ def search_documentation(client, query, library=None):
     try:
         vector_store_type = get_vector_store_type()
         
-        # Check if we have an OpenAI API key for embeddings
-        if not st.session_state.openai_api_key:
-            st.error("OpenAI API Key is required for generating embeddings. Please provide it in the sidebar.")
+        # Get embeddings
+        embeddings = get_embeddings()
+        if not embeddings:
             return [], []
             
-        embeddings = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
-        
         if vector_store_type == "mongodb":
             db = client['sdk_documentation']
             
@@ -663,6 +733,19 @@ def generate_code_solution(task, vector_results, structured_docs):
             ]
             ai_msg = llm.invoke(code_messages)
             solution = ai_msg.content
+        elif isinstance(llm, Replicate):
+            # For Replicate, we'll use a different approach to handle streaming responses
+            messages = [
+                SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material."),
+                HumanMessage(content=code_prompt)
+            ]
+            
+            # Construct a chat-like prompt for Replicate models
+            formatted_prompt = "System: You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material.\n\nHuman: " + code_prompt + "\n\nAssistant:"
+            
+            # Use invoke and collect the full response
+            response = llm.invoke(formatted_prompt)
+            solution = response  # The response is already the string content
         else:
             code_messages = [
                 SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material."),
@@ -701,6 +784,10 @@ def generate_code_solution(task, vector_results, structured_docs):
             ]
             review_ai_msg = llm.invoke(review_messages)
             review_result = review_ai_msg.content
+        elif isinstance(llm, Replicate):
+            # For Replicate, use the same approach as for the initial solution
+            formatted_review_prompt = "System: You are an expert code reviewer.\n\nHuman: " + review_prompt + "\n\nAssistant:"
+            review_result = llm.invoke(formatted_review_prompt)
         else:
             review_messages = [
                 SystemMessage(content="You are an expert code reviewer."),
@@ -777,15 +864,17 @@ def process_request(request):
         
         # If we don't have enough relevant results, scrape the documentation
         if len(vector_results) < 3 or not structured_docs:
-            st.info(f"Scraping SDK documentation from {url}... This may take a moment.")
+            st.info(f"Getting SDK documentation from {url}... This may take a moment.")
+            
+            # Use FireCrawl or fallback to BeautifulSoup
             documentation, vector_docs = scrape_documentation(url)
             
             if documentation and vector_docs:
                 store_result = store_documentation(client, documentation, vector_docs)
                 if store_result:
-                    st.success(f"Documentation from {url} scraped and stored successfully!")
+                    st.success(f"Documentation from {url} processed and stored successfully!")
                 else:
-                    st.warning(f"Documentation from {url} was scraped but could not be stored completely.")
+                    st.warning(f"Documentation from {url} was processed but could not be stored completely.")
                 
                 # Search again with the new documentation
                 vector_results, structured_docs = search_documentation(client, task, library)
@@ -863,6 +952,10 @@ def process_feedback(feedback, original_solution):
         ]
         ai_msg = llm.invoke(messages)
         improved_solution = ai_msg.content
+    elif isinstance(llm, Replicate):
+        # For Replicate, use the same approach as in generate_code_solution
+        formatted_feedback_prompt = "System: You are an expert Python developer tasked with improving code based on user feedback.\n\nHuman: " + feedback_prompt + "\n\nAssistant:"
+        improved_solution = llm.invoke(formatted_feedback_prompt)
     else:
         messages = [
             SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
