@@ -1371,4 +1371,3 @@ if st.button("Start New Task"):
     st.session_state.progress_status = ""
     st.session_state.progress_details = []
     st.rerun()
-'''python
