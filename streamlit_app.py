@@ -242,6 +242,8 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
             "max_length": params.get("max_tokens", 500),
             "top_p": params.get("top_p", 1)
         }
+        
+        # Fix: Keep api_token separate from model_kwargs to match the expected API
         return Replicate(
             model=custom_model,
             model_kwargs=model_kwargs,
