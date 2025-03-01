@@ -15,7 +15,6 @@ from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
 from langchain_core.messages import HumanMessage, SystemMessage
 import time
 import getpass
@@ -121,43 +120,116 @@ with st.sidebar:
             st.session_state.huggingface_api_token = huggingface_api_token
             os.environ["HUGGINGFACEHUB_API_TOKEN"] = huggingface_api_token
 
-# Function to get the appropriate LLM based on user selection
-def get_llm(provider, temperature=0.2):
+# Function to determine optimal model parameters for code generation
+def determine_optimal_parameters(provider, sdk_name):
+    # Default parameters that will be used as a base
+    default_params = {
+        "temperature": 0.2,
+        "top_p": 0.95,
+        "max_tokens": 4000,
+        "repetition_penalty": 1.03
+    }
+    
+    # Get optimal parameters based on model provider and task
+    prompt = f"""
+    I need to determine the optimal parameters for using a {provider} language model for code generation with {sdk_name} SDK.
+    Based on your knowledge of code generation tasks, what would be the ideal settings for:
+    1. temperature
+    2. top_p
+    3. max_tokens or max_length
+    4. repetition_penalty (if applicable)
+    
+    Please respond with a JSON object containing these parameters.
+    """
+    
+    # Determine the base model to use for this parameter optimization task
+    if "OpenAI" in provider:
+        # Use a reliable model to determine parameters
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+        messages = [
+            SystemMessage(content="You are an expert in optimizing LLM parameters for code generation tasks."),
+            HumanMessage(content=prompt)
+        ]
+        response = llm.invoke(messages).content
+    elif "Anthropic" in provider:
+        llm = ChatAnthropic(model="claude-3-5-sonnet-latest", temperature=0.0)
+        messages = [
+            SystemMessage(content="You are an expert in optimizing LLM parameters for code generation tasks."),
+            HumanMessage(content=prompt)
+        ]
+        response = llm.invoke(messages).content
+    else:
+        # For other providers, return default parameters
+        return default_params
+    
+    # Try to extract a JSON object from the response
+    try:
+        # Find JSON pattern in the response
+        pattern = r'\{.*\}'
+        match = re.search(pattern, response, re.DOTALL)
+        if match:
+            params = json.loads(match.group())
+            # Update the default parameters with the optimized ones
+            default_params.update(params)
+    except:
+        # If parsing fails, use the default parameters
+        pass
+    
+    return default_params
+
+# Function to get the appropriate LLM based on user selection and optimized parameters
+def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
+    # Get optimized parameters if task and sdk_name are provided
+    params = {}
+    if task and sdk_name:
+        params = determine_optimal_parameters(provider, sdk_name)
+    else:
+        params = {"temperature": temperature}
+
     if provider == "OpenAI GPT-4o":
-        return ChatOpenAI(model="gpt-4o-latest", temperature=temperature)
+        return ChatOpenAI(model="gpt-4o-latest", model_kwargs=params)
     elif provider == "OpenAI GPT-4.5 Preview":
-        return ChatOpenAI(model="gpt-4.5-preview", temperature=temperature)
+        return ChatOpenAI(model="gpt-4.5-preview", model_kwargs=params)
     elif provider == "OpenAI GPT-4o-mini":
-        return ChatOpenAI(model="gpt-4o-mini", temperature=temperature)
+        return ChatOpenAI(model="gpt-4o-mini", model_kwargs=params)
     elif provider == "OpenAI o1":
-        return ChatOpenAI(model="o1", temperature=temperature)
+        return ChatOpenAI(model="o1", model_kwargs=params)
     elif provider == "OpenAI o1-preview":
-        return ChatOpenAI(model="o1-preview", temperature=temperature)
+        return ChatOpenAI(model="o1-preview", model_kwargs=params)
     elif provider == "OpenAI o1-mini":
-        return ChatOpenAI(model="o1-mini", temperature=temperature)
+        return ChatOpenAI(model="o1-mini", model_kwargs=params)
     elif provider == "OpenAI o3-mini":
-        return ChatOpenAI(model="o3-mini", temperature=temperature)
+        return ChatOpenAI(model="o3-mini", model_kwargs=params)
     elif provider == "Anthropic Claude 3.7 Sonnet":
-        return ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=temperature)
+        return ChatAnthropic(model="claude-3-7-sonnet-20250219", model_kwargs=params)
     elif provider == "Anthropic Claude 3.5 Latest":
-        return ChatAnthropic(model="claude-3-5-sonnet-latest", temperature=temperature)
+        return ChatAnthropic(model="claude-3-5-sonnet-latest", model_kwargs=params)
     elif provider == "Replicate Model" and custom_model:
+        # For Replicate, handle parameters in model_kwargs format
+        model_kwargs = {
+            "temperature": params.get("temperature", 0.2),
+            "max_length": params.get("max_tokens", 500),
+            "top_p": params.get("top_p", 1)
+        }
         return Replicate(
             model=custom_model,
-            temperature=temperature
+            model_kwargs=model_kwargs
         )
     elif provider == "HuggingFace Hub" and custom_model:
+        # For HuggingFace, use specific parameter structure
         llm = HuggingFaceEndpoint(
             repo_id=custom_model,
             task="text-generation",
-            max_new_tokens=512,
-            do_sample=False,
-            repetition_penalty=1.03,
+            max_new_tokens=params.get("max_tokens", 512),
+            do_sample=params.get("temperature", 0.2) > 0,
+            temperature=params.get("temperature", 0.2),
+            top_p=params.get("top_p", 0.95),
+            repetition_penalty=params.get("repetition_penalty", 1.03)
         )
         return ChatHuggingFace(llm=llm)
     else:
         # Default to GPT-4o if nothing valid is selected
-        return ChatOpenAI(model="gpt-4o-latest", temperature=temperature)
+        return ChatOpenAI(model="gpt-4o-latest", model_kwargs=params)
 
 # Check if MongoDB URI is available, otherwise use Chroma
 def get_vector_store_type():
@@ -488,8 +560,57 @@ def search_documentation(client, query, library=None):
 # Function to generate code solution using the selected model
 def generate_code_solution(task, vector_results, structured_docs):
     try:
-        # Create a prompt for the code generation
-        prompt_template = """
+        # Extract library name from structured docs for parameter optimization
+        sdk_name = "Unknown"
+        if structured_docs and len(structured_docs) > 0:
+            if "library" in structured_docs[0]:
+                sdk_name = structured_docs[0]["library"]
+
+        # Format the vector chunks
+        vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
+        
+        # Format the structured docs
+        structured_docs_str = json.dumps(structured_docs, indent=2)
+        
+        # First determine the optimal parameters for code generation
+        parameter_prompt = f"""
+        I need to generate code for the following task using {sdk_name} SDK:
+        
+        TASK: {task}
+        
+        What would be the optimal LLM parameters for this code generation task?
+        Consider:
+        1. The complexity of the code to be generated
+        2. The need for accurate import statements and API usage
+        3. The specificity required in following the SDK documentation
+        
+        Please determine the optimal temperature, max_tokens, and top_p values.
+        """
+        
+        # Get a basic model to determine parameters
+        basic_llm = get_llm(llm_provider, temperature=0)
+        
+        # Handle different model types
+        if isinstance(basic_llm, ChatHuggingFace):
+            parameter_messages = [
+                SystemMessage(content="You are an expert in optimizing LLM parameters for code generation."),
+                HumanMessage(content=parameter_prompt)
+            ]
+            parameter_response = basic_llm.invoke(parameter_messages).content
+        else:
+            # For other models, create a system message
+            parameter_messages = [
+                SystemMessage(content="You are an expert in optimizing LLM parameters for code generation."),
+                HumanMessage(content=parameter_prompt)
+            ]
+            parameter_response = basic_llm.invoke(parameter_messages).content
+        
+        # Extract parameter recommendations
+        # Get the optimized LLM with task-specific parameters
+        llm = get_llm(llm_provider, task=task, sdk_name=sdk_name)
+        
+        # Create the code generation prompt
+        code_prompt = f"""
         You are an expert Python developer tasked with generating code based on SDK documentation.
         
         USER TASK: {task}
@@ -498,74 +619,37 @@ def generate_code_solution(task, vector_results, structured_docs):
         {vector_chunks}
         
         STRUCTURED DOCUMENTATION:
-        {structured_docs}
+        {structured_docs_str}
         
         Your task is to:
         1. Understand the SDK's structure and available classes/functions
-        2. Pay special attention to the correct import statements
-        3. Generate complete, working code for the user's task
-        4. Include clear comments explaining your implementation
-        5. Verify that all functions and classes used are correctly imported
+        2. Pay special attention to the correct import statements from the documentation 
+        3. Use specifically the modules and classes as shown in the documentation, not from your training data
+        4. Generate complete, working code for the user's task
+        5. Include clear comments explaining your implementation
+        6. Verify that all functions and classes used are correctly imported
+        7. Explicitly take import statements and correct use of modules from the documentation, not your training data
         
         YOUR SOLUTION (complete Python code):
         """
         
-        # Format the vector chunks
-        vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
-        
-        # Format the structured docs
-        structured_docs_str = json.dumps(structured_docs, indent=2)
-        
-        # Get the selected model
-        llm = get_llm(llm_provider, temperature=0.2)
-        
-        # Handle different model types
-        if llm_provider == "HuggingFace Hub":
-            # For ChatHuggingFace model
-            messages = [
+        # Generate solution based on model type
+        if isinstance(llm, ChatHuggingFace):
+            code_messages = [
                 SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation."),
-                HumanMessage(content=f"""
-                USER TASK: {task}
-                
-                DOCUMENTATION CHUNKS:
-                {vector_chunks}
-                
-                STRUCTURED DOCUMENTATION:
-                {structured_docs_str}
-                
-                Your task is to:
-                1. Understand the SDK's structure and available classes/functions
-                2. Pay special attention to the correct import statements
-                3. Generate complete, working code for the user's task
-                4. Include clear comments explaining your implementation
-                5. Verify that all functions and classes used are correctly imported
-                
-                YOUR SOLUTION (complete Python code):
-                """)
+                HumanMessage(content=code_prompt)
             ]
-            
-            ai_msg = llm.invoke(messages)
+            ai_msg = llm.invoke(code_messages)
             solution = ai_msg.content
         else:
-            # For other LLM types
-            # Create the prompt
-            prompt = PromptTemplate(
-                input_variables=["task", "vector_chunks", "structured_docs"],
-                template=prompt_template
-            )
-            
-            # Create the chain with the selected model
-            chain = LLMChain(llm=llm, prompt=prompt)
-            
-            # Generate the solution
-            solution = chain.run(
-                task=task,
-                vector_chunks=vector_chunks,
-                structured_docs=structured_docs_str
-            )
+            code_messages = [
+                SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation."),
+                HumanMessage(content=code_prompt)
+            ]
+            solution = llm.invoke(code_messages).content
         
         # Review the solution for accuracy
-        review_prompt_template = """
+        review_prompt = f"""
         You are an expert code reviewer. You need to verify if the generated code correctly 
         uses the SDK according to its documentation.
         
@@ -576,60 +660,31 @@ def generate_code_solution(task, vector_results, structured_docs):
         {vector_chunks}
         
         STRUCTURED DOCUMENTATION:
-        {structured_docs}
+        {structured_docs_str}
         
         Please review the code and check:
-        1. Are the import statements correct?
-        2. Are all classes and functions used correctly?
+        1. Are the import statements correct and match the documentation?
+        2. Are all classes and functions used correctly according to the documentation?
         3. Does the code fulfill the user's requirements?
         4. Are there any errors or improvements needed?
         
         If any issues are found, provide the corrected code. If no issues are found, simply return "VERIFIED" followed by the original code.
-        
-        YOUR REVIEW:
         """
         
         # Handle review based on model type
-        if llm_provider == "HuggingFace Hub":
-            # For ChatHuggingFace model
+        if isinstance(llm, ChatHuggingFace):
             review_messages = [
                 SystemMessage(content="You are an expert code reviewer."),
-                HumanMessage(content=f"""
-                GENERATED CODE:
-                {solution}
-                
-                DOCUMENTATION CHUNKS:
-                {vector_chunks}
-                
-                STRUCTURED DOCUMENTATION:
-                {structured_docs_str}
-                
-                Please review the code and check:
-                1. Are the import statements correct?
-                2. Are all classes and functions used correctly?
-                3. Does the code fulfill the user's requirements?
-                4. Are there any errors or improvements needed?
-                
-                If any issues are found, provide the corrected code. If no issues are found, simply return "VERIFIED" followed by the original code.
-                """)
+                HumanMessage(content=review_prompt)
             ]
-            
             review_ai_msg = llm.invoke(review_messages)
             review_result = review_ai_msg.content
         else:
-            # For other LLM types
-            review_prompt = PromptTemplate(
-                input_variables=["solution", "vector_chunks", "structured_docs"],
-                template=review_prompt_template
-            )
-            
-            review_chain = LLMChain(llm=llm, prompt=review_prompt)
-            
-            review_result = review_chain.run(
-                solution=solution,
-                vector_chunks=vector_chunks,
-                structured_docs=structured_docs_str
-            )
+            review_messages = [
+                SystemMessage(content="You are an expert code reviewer."),
+                HumanMessage(content=review_prompt)
+            ]
+            review_result = llm.invoke(review_messages).content
         
         # If the review verifies the code, return the original solution
         if review_result.startswith("VERIFIED"):
@@ -738,93 +793,57 @@ def process_feedback(feedback, original_solution):
     # Re-search documentation based on the feedback
     vector_results, structured_docs = search_documentation(client, feedback)
     
-    # Get the selected model
-    llm = get_llm(llm_provider, temperature=0.2)
+    # Extract library name from structured docs for parameter optimization
+    sdk_name = "Unknown"
+    if structured_docs and len(structured_docs) > 0:
+        if "library" in structured_docs[0]:
+            sdk_name = structured_docs[0]["library"]
+    
+    # Get the selected model with optimal parameters
+    llm = get_llm(llm_provider, task=feedback, sdk_name=sdk_name)
+    
+    # Format the vector chunks and structured docs
+    vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
+    structured_docs_str = json.dumps(structured_docs, indent=2)
+    
+    # Create feedback processing prompt
+    feedback_prompt = f"""
+    You are an expert Python developer tasked with improving code based on user feedback.
+    
+    ORIGINAL CODE:
+    {original_solution}
+    
+    USER FEEDBACK:
+    {feedback}
+    
+    DOCUMENTATION CHUNKS:
+    {vector_chunks}
+    
+    STRUCTURED DOCUMENTATION:
+    {structured_docs_str}
+    
+    Your task is to:
+    1. Understand the user's feedback
+    2. Check the documentation to verify the correct usage
+    3. Fix any issues in the original code
+    4. Ensure all imports and API usages are correct according to the documentation
+    5. Provide the improved solution
+    """
     
     # Handle different model types for feedback processing
-    if llm_provider == "HuggingFace Hub":
-        # Format the vector chunks
-        vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
-        
-        # Format the structured docs
-        structured_docs_str = json.dumps(structured_docs, indent=2)
-        
-        # For ChatHuggingFace model
+    if isinstance(llm, ChatHuggingFace):
         messages = [
             SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
-            HumanMessage(content=f"""
-            ORIGINAL CODE:
-            {original_solution}
-            
-            USER FEEDBACK:
-            {feedback}
-            
-            DOCUMENTATION CHUNKS:
-            {vector_chunks}
-            
-            STRUCTURED DOCUMENTATION:
-            {structured_docs_str}
-            
-            Your task is to:
-            1. Understand the user's feedback
-            2. Check the documentation to verify the correct usage
-            3. Fix any issues in the original code
-            4. Ensure all imports and API usages are correct
-            5. Provide the improved solution
-            """)
+            HumanMessage(content=feedback_prompt)
         ]
-        
         ai_msg = llm.invoke(messages)
         improved_solution = ai_msg.content
     else:
-        # Generate improved solution based on feedback
-        feedback_prompt_template = """
-        You are an expert Python developer tasked with improving code based on user feedback.
-        
-        ORIGINAL CODE:
-        {original_solution}
-        
-        USER FEEDBACK:
-        {feedback}
-        
-        DOCUMENTATION CHUNKS:
-        {vector_chunks}
-        
-        STRUCTURED DOCUMENTATION:
-        {structured_docs}
-        
-        Your task is to:
-        1. Understand the user's feedback
-        2. Check the documentation to verify the correct usage
-        3. Fix any issues in the original code
-        4. Ensure all imports and API usages are correct
-        5. Provide the improved solution
-        
-        YOUR IMPROVED SOLUTION:
-        """
-        
-        # Format the vector chunks
-        vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
-        
-        # Format the structured docs
-        structured_docs_str = json.dumps(structured_docs, indent=2)
-        
-        # Create the prompt
-        prompt = PromptTemplate(
-            input_variables=["original_solution", "feedback", "vector_chunks", "structured_docs"],
-            template=feedback_prompt_template
-        )
-        
-        # Create the chain with the selected model
-        chain = LLMChain(llm=llm, prompt=prompt)
-        
-        # Generate the improved solution
-        improved_solution = chain.run(
-            original_solution=original_solution,
-            feedback=feedback,
-            vector_chunks=vector_chunks,
-            structured_docs=structured_docs_str
-        )
+        messages = [
+            SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
+            HumanMessage(content=feedback_prompt)
+        ]
+        improved_solution = llm.invoke(messages).content
     
     if client:
         client.close()
