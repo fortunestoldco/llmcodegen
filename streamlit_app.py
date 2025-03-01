@@ -908,6 +908,7 @@ def extract_urls(text):
 
 # Function to extract task from text
 def extract_task(text, urls):
+    # This is the key function that needs fixing
     # Remove URLs from text to get the task
     task_text = text
     for url in urls:
@@ -917,9 +918,10 @@ def extract_task(text, urls):
     task_text = re.sub(r'\s+', ' ', task_text).strip()
     
     # Remove common prefixes like "Using the SDK" or "build a" if present
-    task_text = re.sub(r'^(?:Using|using)\s+(?:the|latest)?\s*(?:SDK|Python SDK|API)(?:\s+at)?\s*,?\s*', '', task_text, flags=re.IGNORECASE)
+    task_text = re.sub(r'^(?:Using|using)\s+(?:the|latest)?\s*(?:documentation|SDK|Python SDK|API)(?:\s+at)?\s*,?\s*', '', task_text, flags=re.IGNORECASE)
     task_text = re.sub(r'^(?:build|create|implement|develop|code)(?:\s+a|\s+an)?\s*', '', task_text, flags=re.IGNORECASE)
     
+    # If the task still contains "create a basic RAG agent graph" or similar, that's what we want
     return task_text.strip()
 
 # Function to process a user request
