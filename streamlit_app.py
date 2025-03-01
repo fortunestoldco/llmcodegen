@@ -143,23 +143,23 @@ def determine_optimal_parameters(provider, sdk_name):
     """
     
     # Determine the base model to use for this parameter optimization task
-    if "OpenAI" in provider:
+    if "OpenAI" in provider and st.session_state.openai_api_key:
         # Use a reliable model to determine parameters
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0, api_key=st.session_state.openai_api_key)
         messages = [
             SystemMessage(content="You are an expert in optimizing LLM parameters for code generation tasks."),
             HumanMessage(content=prompt)
         ]
         response = llm.invoke(messages).content
-    elif "Anthropic" in provider:
-        llm = ChatAnthropic(model="claude-3-5-sonnet-latest", temperature=0.0)
+    elif "Anthropic" in provider and st.session_state.anthropic_api_key:
+        llm = ChatAnthropic(model="claude-3-5-sonnet-latest", temperature=0.0, api_key=st.session_state.anthropic_api_key)
         messages = [
             SystemMessage(content="You are an expert in optimizing LLM parameters for code generation tasks."),
             HumanMessage(content=prompt)
         ]
         response = llm.invoke(messages).content
     else:
-        # For other providers, return default parameters
+        # For other providers or if keys are missing, return default parameters
         return default_params
     
     # Try to extract a JSON object from the response
@@ -186,25 +186,55 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
     else:
         params = {"temperature": temperature}
 
-    if provider == "OpenAI GPT-4o":
-        return ChatOpenAI(model="gpt-4o-latest", model_kwargs=params)
-    elif provider == "OpenAI GPT-4.5 Preview":
-        return ChatOpenAI(model="gpt-4.5-preview", model_kwargs=params)
-    elif provider == "OpenAI GPT-4o-mini":
-        return ChatOpenAI(model="gpt-4o-mini", model_kwargs=params)
-    elif provider == "OpenAI o1":
-        return ChatOpenAI(model="o1", model_kwargs=params)
-    elif provider == "OpenAI o1-preview":
-        return ChatOpenAI(model="o1-preview", model_kwargs=params)
-    elif provider == "OpenAI o1-mini":
-        return ChatOpenAI(model="o1-mini", model_kwargs=params)
-    elif provider == "OpenAI o3-mini":
-        return ChatOpenAI(model="o3-mini", model_kwargs=params)
-    elif provider == "Anthropic Claude 3.7 Sonnet":
-        return ChatAnthropic(model="claude-3-7-sonnet-20250219", model_kwargs=params)
-    elif provider == "Anthropic Claude 3.5 Latest":
-        return ChatAnthropic(model="claude-3-5-sonnet-latest", model_kwargs=params)
+    if "OpenAI" in provider:
+        if not st.session_state.openai_api_key:
+            st.error("OpenAI API Key is required for OpenAI models. Please provide it in the sidebar.")
+            return None
+            
+        model_name = ""
+        if provider == "OpenAI GPT-4o":
+            model_name = "gpt-4o-latest"
+        elif provider == "OpenAI GPT-4.5 Preview":
+            model_name = "gpt-4.5-preview"
+        elif provider == "OpenAI GPT-4o-mini":
+            model_name = "gpt-4o-mini"
+        elif provider == "OpenAI o1":
+            model_name = "o1"
+        elif provider == "OpenAI o1-preview":
+            model_name = "o1-preview"
+        elif provider == "OpenAI o1-mini":
+            model_name = "o1-mini"
+        elif provider == "OpenAI o3-mini":
+            model_name = "o3-mini"
+            
+        return ChatOpenAI(
+            model=model_name, 
+            model_kwargs=params, 
+            api_key=st.session_state.openai_api_key
+        )
+            
+    elif "Anthropic" in provider:
+        if not st.session_state.anthropic_api_key:
+            st.error("Anthropic API Key is required for Claude models. Please provide it in the sidebar.")
+            return None
+            
+        model_name = ""
+        if provider == "Anthropic Claude 3.7 Sonnet":
+            model_name = "claude-3-7-sonnet-20250219"
+        elif provider == "Anthropic Claude 3.5 Latest":
+            model_name = "claude-3-5-sonnet-latest"
+            
+        return ChatAnthropic(
+            model=model_name, 
+            model_kwargs=params, 
+            api_key=st.session_state.anthropic_api_key
+        )
+        
     elif provider == "Replicate Model" and custom_model:
+        if not st.session_state.replicate_api_token:
+            st.error("Replicate Access Token is required for Replicate models. Please provide it in the sidebar.")
+            return None
+            
         # For Replicate, handle parameters in model_kwargs format
         model_kwargs = {
             "temperature": params.get("temperature", 0.2),
@@ -213,9 +243,15 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
         }
         return Replicate(
             model=custom_model,
-            model_kwargs=model_kwargs
+            model_kwargs=model_kwargs,
+            api_token=st.session_state.replicate_api_token
         )
+        
     elif provider == "HuggingFace Hub" and custom_model:
+        if not st.session_state.huggingface_api_token:
+            st.error("HuggingFace Access Token is required for HuggingFace Hub models. Please provide it in the sidebar.")
+            return None
+            
         # For HuggingFace, use specific parameter structure
         llm = HuggingFaceEndpoint(
             repo_id=custom_model,
@@ -224,12 +260,14 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
             do_sample=params.get("temperature", 0.2) > 0,
             temperature=params.get("temperature", 0.2),
             top_p=params.get("top_p", 0.95),
-            repetition_penalty=params.get("repetition_penalty", 1.03)
+            repetition_penalty=params.get("repetition_penalty", 1.03),
+            token=st.session_state.huggingface_api_token
         )
         return ChatHuggingFace(llm=llm)
     else:
-        # Default to GPT-4o if nothing valid is selected
-        return ChatOpenAI(model="gpt-4o-latest", model_kwargs=params)
+        # If nothing valid is selected, return None
+        st.error("Please select a valid model provider and ensure you have the required API keys set.")
+        return None
 
 # Check if MongoDB URI is available, otherwise use Chroma
 def get_vector_store_type():
@@ -423,7 +461,13 @@ def scrape_documentation(url):
 def store_documentation(client, documentation, vector_docs):
     try:
         vector_store_type = get_vector_store_type()
-        embeddings = OpenAIEmbeddings()
+        
+        # Check if we have an OpenAI API key for embeddings
+        if not st.session_state.openai_api_key:
+            st.error("OpenAI API Key is required for generating embeddings. Please provide it in the sidebar.")
+            return False
+            
+        embeddings = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
         
         if vector_store_type == "mongodb":
             db = client['sdk_documentation']
@@ -486,7 +530,13 @@ def store_documentation(client, documentation, vector_docs):
 def search_documentation(client, query, library=None):
     try:
         vector_store_type = get_vector_store_type()
-        embeddings = OpenAIEmbeddings()
+        
+        # Check if we have an OpenAI API key for embeddings
+        if not st.session_state.openai_api_key:
+            st.error("OpenAI API Key is required for generating embeddings. Please provide it in the sidebar.")
+            return [], []
+            
+        embeddings = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
         
         if vector_store_type == "mongodb":
             db = client['sdk_documentation']
@@ -572,46 +622,15 @@ def generate_code_solution(task, vector_results, structured_docs):
         # Format the structured docs
         structured_docs_str = json.dumps(structured_docs, indent=2)
         
-        # First determine the optimal parameters for code generation
-        parameter_prompt = f"""
-        I need to generate code for the following task using {sdk_name} SDK:
-        
-        TASK: {task}
-        
-        What would be the optimal LLM parameters for this code generation task?
-        Consider:
-        1. The complexity of the code to be generated
-        2. The need for accurate import statements and API usage
-        3. The specificity required in following the SDK documentation
-        
-        Please determine the optimal temperature, max_tokens, and top_p values.
-        """
-        
-        # Get a basic model to determine parameters
-        basic_llm = get_llm(llm_provider, temperature=0)
-        
-        # Handle different model types
-        if isinstance(basic_llm, ChatHuggingFace):
-            parameter_messages = [
-                SystemMessage(content="You are an expert in optimizing LLM parameters for code generation."),
-                HumanMessage(content=parameter_prompt)
-            ]
-            parameter_response = basic_llm.invoke(parameter_messages).content
-        else:
-            # For other models, create a system message
-            parameter_messages = [
-                SystemMessage(content="You are an expert in optimizing LLM parameters for code generation."),
-                HumanMessage(content=parameter_prompt)
-            ]
-            parameter_response = basic_llm.invoke(parameter_messages).content
-        
-        # Extract parameter recommendations
         # Get the optimized LLM with task-specific parameters
         llm = get_llm(llm_provider, task=task, sdk_name=sdk_name)
         
+        if not llm:
+            return "Error: Could not initialize the language model. Please check your API keys."
+        
         # Create the code generation prompt
         code_prompt = f"""
-        You are an expert Python developer tasked with generating code based on SDK documentation.
+        You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material.
         
         USER TASK: {task}
         
@@ -636,14 +655,14 @@ def generate_code_solution(task, vector_results, structured_docs):
         # Generate solution based on model type
         if isinstance(llm, ChatHuggingFace):
             code_messages = [
-                SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation."),
+                SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material."),
                 HumanMessage(content=code_prompt)
             ]
             ai_msg = llm.invoke(code_messages)
             solution = ai_msg.content
         else:
             code_messages = [
-                SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation."),
+                SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material."),
                 HumanMessage(content=code_prompt)
             ]
             solution = llm.invoke(code_messages).content
@@ -651,7 +670,7 @@ def generate_code_solution(task, vector_results, structured_docs):
         # Review the solution for accuracy
         review_prompt = f"""
         You are an expert code reviewer. You need to verify if the generated code correctly 
-        uses the SDK according to its documentation.
+        uses the SDK according to its documentation or API Reference Material.
         
         GENERATED CODE:
         {solution}
@@ -802,6 +821,9 @@ def process_feedback(feedback, original_solution):
     # Get the selected model with optimal parameters
     llm = get_llm(llm_provider, task=feedback, sdk_name=sdk_name)
     
+    if not llm:
+        return "Error: Could not initialize the language model. Please check your API keys."
+    
     # Format the vector chunks and structured docs
     vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
     structured_docs_str = json.dumps(structured_docs, indent=2)
@@ -824,7 +846,7 @@ def process_feedback(feedback, original_solution):
     
     Your task is to:
     1. Understand the user's feedback
-    2. Check the documentation to verify the correct usage
+    2. Check the documentation or API Reference Material to verify the correct usage
     3. Fix any issues in the original code
     4. Ensure all imports and API usages are correct according to the documentation
     5. Provide the improved solution
