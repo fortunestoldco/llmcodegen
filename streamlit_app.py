@@ -51,6 +51,8 @@ if "huggingface_api_token" not in st.session_state:
     st.session_state.huggingface_api_token = os.environ.get("HUGGINGFACEHUB_API_TOKEN", "")
 if "firecrawl_api_key" not in st.session_state:
     st.session_state.firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY", "")
+if "progress_status" not in st.session_state:
+    st.session_state.progress_status = ""
 
 # Sidebar for configuration
 with st.sidebar:
@@ -226,7 +228,8 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
         return ChatOpenAI(
             model=model_name, 
             model_kwargs=params, 
-            api_key=st.session_state.openai_api_key
+            api_key=st.session_state.openai_api_key,
+            streaming=True  # Enable streaming for real-time updates
         )
             
     elif "Anthropic" in provider:
@@ -243,7 +246,8 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
         return ChatAnthropic(
             model=model_name, 
             model_kwargs=params, 
-            api_key=st.session_state.anthropic_api_key
+            api_key=st.session_state.anthropic_api_key,
+            streaming=True  # Enable streaming for real-time updates
         )
         
     elif provider == "Replicate Model" and custom_model:
@@ -282,7 +286,8 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
             temperature=params.get("temperature", 0.2),
             top_p=params.get("top_p", 0.95),
             repetition_penalty=params.get("repetition_penalty", 1.03),
-            token=st.session_state.huggingface_api_token
+            token=st.session_state.huggingface_api_token,
+            streaming=True  # Enable streaming for real-time updates
         )
         return ChatHuggingFace(llm=llm)
     else:
@@ -336,10 +341,12 @@ def get_embeddings():
 
 # Function to scrape the SDK documentation using Firecrawl or fallback to BeautifulSoup
 def scrape_documentation(url):
+    # Update progress status
+    st.session_state.progress_status = f"Using Firecrawl to crawl {url}..."
+    
     # Try to use Firecrawl if API key is available
     if st.session_state.firecrawl_api_key:
         try:
-            st.info(f"Using Firecrawl to crawl {url}...")
             loader = FireCrawlLoader(
                 api_key=st.session_state.firecrawl_api_key,
                 url=url,
@@ -370,12 +377,12 @@ def scrape_documentation(url):
                 
                 return documentation, docs
             else:
-                st.warning(f"Firecrawl returned no documents for {url}. Falling back to basic scraping.")
+                st.session_state.progress_status = f"Firecrawl returned no documents for {url}. Falling back to basic scraping."
                 # Fall back to basic scraping
                 return fallback_scrape_documentation(url)
                 
         except Exception as e:
-            st.warning(f"Error using Firecrawl: {e}. Falling back to basic scraping.")
+            st.session_state.progress_status = f"Error using Firecrawl: {e}. Falling back to basic scraping."
             # Fall back to basic scraping
             return fallback_scrape_documentation(url)
     else:
@@ -385,6 +392,7 @@ def scrape_documentation(url):
 # Fallback scraping function using BeautifulSoup
 def fallback_scrape_documentation(url):
     try:
+        st.session_state.progress_status = f"Scraping documentation from {url} using BeautifulSoup..."
         response = requests.get(url)
         response.raise_for_status()
         
@@ -531,12 +539,13 @@ def fallback_scrape_documentation(url):
         return documentation, docs
     
     except Exception as e:
-        st.error(f"Error scraping documentation: {e}")
+        st.session_state.progress_status = f"Error scraping documentation: {e}"
         return None, None
 
 # Function to store documentation (MongoDB or Chroma)
 def store_documentation(client, documentation, vector_docs):
     try:
+        st.session_state.progress_status = "Storing documentation in vector database..."
         vector_store_type = get_vector_store_type()
         
         # Get embeddings
@@ -598,12 +607,13 @@ def store_documentation(client, documentation, vector_docs):
         return True
     
     except Exception as e:
-        st.error(f"Error storing documentation: {e}")
+        st.session_state.progress_status = f"Error storing documentation: {e}"
         return False
 
 # Function to search for documentation (MongoDB or Chroma)
 def search_documentation(client, query, library=None):
     try:
+        st.session_state.progress_status = f"Searching documentation for '{query}'..."
         vector_store_type = get_vector_store_type()
         
         # Get embeddings
@@ -670,19 +680,120 @@ def search_documentation(client, query, library=None):
                                 doc = json.load(f)
                                 structured_docs.append(doc)
             except Exception as e:
-                st.warning(f"Error loading Chroma vector store: {e}. Creating a new one.")
+                st.session_state.progress_status = f"Error loading Chroma vector store: {e}. Creating a new one."
                 results = []
                 structured_docs = []
         
         return results, structured_docs
     
     except Exception as e:
-        st.error(f"Error searching documentation: {e}")
+        st.session_state.progress_status = f"Error searching documentation: {e}"
         return [], []
+
+# Function to clean code from timestamp markers
+def clean_code_from_timestamps(code_text):
+    # Remove timestamp markers like [2025-03-01 19:54:57.110174]
+    pattern = r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+\]'
+    clean_text = re.sub(pattern, '', code_text)
+    
+    # Clean up extra whitespace
+    clean_text = re.sub(r'\s+', ' ', clean_text)
+    
+    # Extract code blocks if present
+    code_pattern = r'```python(.*?)```'
+    code_matches = re.findall(code_pattern, clean_text, re.DOTALL)
+    
+    if code_matches:
+        return code_matches[0].strip()
+    
+    # If no code blocks found, try to identify and return just the code portion
+    lines = clean_text.split('\n')
+    code_lines = []
+    in_code_section = False
+    
+    for line in lines:
+        if line.strip().startswith('import ') or line.strip().startswith('from '):
+            in_code_section = True
+        
+        if in_code_section:
+            code_lines.append(line)
+    
+    if code_lines:
+        return '\n'.join(code_lines).strip()
+    
+    # If no obvious code sections found, return the cleaned text
+    return clean_text.strip()
+
+# Custom streaming callback handler for Streamlit
+class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
+    def __init__(self, container):
+        super().__init__()
+        self.container = container
+        self.text = ""
+        self.code_detected = False
+        self.in_code_block = False
+        self.code_block = ""
+        
+    def on_llm_new_token(self, token, **kwargs):
+        self.text += token
+        
+        # Look for code block markers
+        if "```python" in token or "```py" in token:
+            self.in_code_block = True
+            self.code_detected = True
+        elif self.in_code_block and "```" in token:
+            self.in_code_block = False
+        
+        # If we're in a code block, collect the code
+        if self.in_code_block:
+            self.code_block += token
+        
+        # Update the Streamlit container
+        # If code is detected, show it properly formatted
+        if self.code_detected:
+            # Try to extract the code block
+            code_pattern = r'```(?:python|py)(.*?)```'
+            code_matches = re.findall(code_pattern, self.text, re.DOTALL)
+            
+            if code_matches:
+                # Show the explanation text above the code block
+                explanation_text = self.text.split("```python")[0] if "```python" in self.text else self.text.split("```py")[0]
+                self.container.markdown(explanation_text)
+                
+                # Show the code in a dedicated code block
+                self.container.code(code_matches[-1].strip(), language="python")
+                
+                # Show any text that follows the code block
+                if "```" in self.text:
+                    after_code = self.text.split("```")[-1]
+                    if after_code.strip():
+                        self.container.markdown(after_code)
+            else:
+                # If no complete code block yet, just show the text
+                self.container.markdown(self.text)
+        else:
+            # No code detected yet, just show the text
+            self.container.markdown(self.text)
+        
+    def on_llm_end(self, response, **kwargs):
+        # Final cleanup and processing
+        # Extract code block if present
+        code_pattern = r'```(?:python|py)(.*?)```'
+        code_matches = re.findall(code_pattern, self.text, re.DOTALL)
+        
+        if code_matches:
+            # Return the last code block
+            return code_matches[-1].strip()
+        
+        # If no code blocks, clean the text and try to extract code
+        clean_text = clean_code_from_timestamps(self.text)
+        return clean_text
 
 # Function to generate code solution using the selected model
 def generate_code_solution(task, vector_results, structured_docs):
     try:
+        st.session_state.progress_status = "Generating code solution..."
+        
         # Extract library name from structured docs for parameter optimization
         sdk_name = "Unknown"
         if structured_docs and len(structured_docs) > 0:
@@ -722,17 +833,30 @@ def generate_code_solution(task, vector_results, structured_docs):
         6. Verify that all functions and classes used are correctly imported
         7. Explicitly take import statements and correct use of modules from the documentation, not your training data
         
+        IMPORTANT: Always format your code with a proper ```python (code) ``` block for easier parsing.
+        
         YOUR SOLUTION (complete Python code):
         """
         
+        # Create a placeholder for streaming output
+        code_container = st.empty()
+        
+        # Initialize the custom streaming handler
+        streaming_handler = StreamlitCallbackHandler(code_container)
+        
         # Generate solution based on model type
+        solution = ""
+        
         if isinstance(llm, ChatHuggingFace):
             code_messages = [
                 SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material."),
                 HumanMessage(content=code_prompt)
             ]
+            # Set up callbacks for streaming
+            llm.callbacks = [streaming_handler]
             ai_msg = llm.invoke(code_messages)
             solution = ai_msg.content
+            
         elif isinstance(llm, Replicate):
             # For Replicate, we'll use a different approach to handle streaming responses
             messages = [
@@ -744,66 +868,36 @@ def generate_code_solution(task, vector_results, structured_docs):
             formatted_prompt = "System: You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material.\n\nHuman: " + code_prompt + "\n\nAssistant:"
             
             # Use invoke and collect the full response
+            llm.callbacks = [streaming_handler]
             response = llm.invoke(formatted_prompt)
             solution = response  # The response is already the string content
+            
         else:
+            # For OpenAI and Anthropic
             code_messages = [
                 SystemMessage(content="You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material."),
                 HumanMessage(content=code_prompt)
             ]
-            solution = llm.invoke(code_messages).content
+            # Enable streaming
+            llm.callbacks = [streaming_handler]
+            response = llm.invoke(code_messages)
+            solution = response.content
         
-        # Review the solution for accuracy
-        review_prompt = f"""
-        You are an expert code reviewer. You need to verify if the generated code correctly 
-        uses the SDK according to its documentation or API Reference Material.
+        # Extract clean code from solution
+        final_code = clean_code_from_timestamps(solution)
         
-        GENERATED CODE:
-        {solution}
+        # Check if the solution is wrapped in a code block
+        if not (final_code.startswith("```python") or final_code.startswith("```")):
+            # Wrap it in a code block for consistency
+            final_code = f"```python\n{final_code}\n```"
         
-        DOCUMENTATION CHUNKS:
-        {vector_chunks}
+        # Update status
+        st.session_state.progress_status = "Code solution generated successfully!"
         
-        STRUCTURED DOCUMENTATION:
-        {structured_docs_str}
-        
-        Please review the code and check:
-        1. Are the import statements correct and match the documentation?
-        2. Are all classes and functions used correctly according to the documentation?
-        3. Does the code fulfill the user's requirements?
-        4. Are there any errors or improvements needed?
-        
-        If any issues are found, provide the corrected code. If no issues are found, simply return "VERIFIED" followed by the original code.
-        """
-        
-        # Handle review based on model type
-        if isinstance(llm, ChatHuggingFace):
-            review_messages = [
-                SystemMessage(content="You are an expert code reviewer."),
-                HumanMessage(content=review_prompt)
-            ]
-            review_ai_msg = llm.invoke(review_messages)
-            review_result = review_ai_msg.content
-        elif isinstance(llm, Replicate):
-            # For Replicate, use the same approach as for the initial solution
-            formatted_review_prompt = "System: You are an expert code reviewer.\n\nHuman: " + review_prompt + "\n\nAssistant:"
-            review_result = llm.invoke(formatted_review_prompt)
-        else:
-            review_messages = [
-                SystemMessage(content="You are an expert code reviewer."),
-                HumanMessage(content=review_prompt)
-            ]
-            review_result = llm.invoke(review_messages).content
-        
-        # If the review verifies the code, return the original solution
-        if review_result.startswith("VERIFIED"):
-            return solution
-        
-        # Otherwise, return the corrected code
-        return review_result
+        return final_code
     
     except Exception as e:
-        st.error(f"Error generating solution: {e}")
+        st.session_state.progress_status = f"Error generating solution: {e}"
         return f"Error generating solution: {e}"
 
 # Function to extract URLs from text
@@ -830,24 +924,35 @@ def extract_task(text, urls):
 
 # Function to process a user request
 def process_request(request):
+    progress_placeholder = st.empty()
+    
+    def update_progress():
+        progress_placeholder.info(st.session_state.progress_status)
+    
     vector_store_type = get_vector_store_type()
     client = None
     
     if vector_store_type == "mongodb":
         client = get_mongodb_connection()
         if not client:
+            st.session_state.progress_status = "Failed to connect to the database. Please try again."
+            update_progress()
             return "Failed to connect to the database. Please try again."
     
     # Extract URLs from the request
     urls = extract_urls(request)
     
     if not urls:
+        st.session_state.progress_status = "Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation."
+        update_progress()
         return "Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation."
     
     # Extract task from the request
     task = extract_task(request, urls)
     
     if not task:
+        st.session_state.progress_status = "Could not identify the task in your request. Please describe what you want to build."
+        update_progress()
         return "Could not identify the task in your request. Please describe what you want to build."
     
     # Process each URL
@@ -860,23 +965,33 @@ def process_request(request):
         library = library_match.group(2) if library_match else None
         
         # Check if we already have documentation for this library
+        st.session_state.progress_status = f"Checking for existing documentation for {library if library else 'unknown library'}..."
+        update_progress()
         vector_results, structured_docs = search_documentation(client, task, library)
         
         # If we don't have enough relevant results, scrape the documentation
         if len(vector_results) < 3 or not structured_docs:
-            st.info(f"Getting SDK documentation from {url}... This may take a moment.")
+            st.session_state.progress_status = f"Getting SDK documentation from {url}..."
+            update_progress()
             
             # Use FireCrawl or fallback to BeautifulSoup
             documentation, vector_docs = scrape_documentation(url)
+            update_progress()  # Update with the latest status
             
             if documentation and vector_docs:
+                st.session_state.progress_status = f"Storing documentation from {url}..."
+                update_progress()
                 store_result = store_documentation(client, documentation, vector_docs)
+                
                 if store_result:
-                    st.success(f"Documentation from {url} processed and stored successfully!")
+                    st.session_state.progress_status = f"Documentation from {url} processed and stored successfully!"
                 else:
-                    st.warning(f"Documentation from {url} was processed but could not be stored completely.")
+                    st.session_state.progress_status = f"Documentation from {url} was processed but could not be stored completely."
+                update_progress()
                 
                 # Search again with the new documentation
+                st.session_state.progress_status = f"Searching documentation for '{task}'..."
+                update_progress()
                 vector_results, structured_docs = search_documentation(client, task, library)
         
         # Add results to our collections
@@ -884,7 +999,8 @@ def process_request(request):
         all_structured_docs.extend(structured_docs)
     
     # Generate the code solution
-    st.info("Generating code solution...")
+    st.session_state.progress_status = "Generating code solution..."
+    update_progress()
     solution = generate_code_solution(task, all_vector_results, all_structured_docs)
     
     if client:
@@ -902,6 +1018,7 @@ def process_feedback(feedback, original_solution):
             return "Failed to connect to the database. Please try again."
     
     # Re-search documentation based on the feedback
+    st.session_state.progress_status = f"Processing feedback: '{feedback}'..."
     vector_results, structured_docs = search_documentation(client, feedback)
     
     # Extract library name from structured docs for parameter optimization
@@ -919,6 +1036,12 @@ def process_feedback(feedback, original_solution):
     # Format the vector chunks and structured docs
     vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
     structured_docs_str = json.dumps(structured_docs, indent=2)
+    
+    # Create a placeholder for streaming output
+    feedback_container = st.empty()
+    
+    # Initialize the custom streaming handler
+    streaming_handler = StreamlitCallbackHandler(feedback_container)
     
     # Create feedback processing prompt
     feedback_prompt = f"""
@@ -942,40 +1065,84 @@ def process_feedback(feedback, original_solution):
     3. Fix any issues in the original code
     4. Ensure all imports and API usages are correct according to the documentation
     5. Provide the improved solution
+    
+    IMPORTANT: Always format your code with a proper ```python (code) ``` block for easier parsing.
     """
     
     # Handle different model types for feedback processing
-    if isinstance(llm, ChatHuggingFace):
-        messages = [
-            SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
-            HumanMessage(content=feedback_prompt)
-        ]
-        ai_msg = llm.invoke(messages)
-        improved_solution = ai_msg.content
-    elif isinstance(llm, Replicate):
-        # For Replicate, use the same approach as in generate_code_solution
-        formatted_feedback_prompt = "System: You are an expert Python developer tasked with improving code based on user feedback.\n\nHuman: " + feedback_prompt + "\n\nAssistant:"
-        improved_solution = llm.invoke(formatted_feedback_prompt)
-    else:
-        messages = [
-            SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
-            HumanMessage(content=feedback_prompt)
-        ]
-        improved_solution = llm.invoke(messages).content
+    improved_solution = ""
     
-    if client:
-        client.close()
-    return improved_solution
+    try:
+        if isinstance(llm, ChatHuggingFace):
+            messages = [
+                SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
+                HumanMessage(content=feedback_prompt)
+            ]
+            # Set up callbacks for streaming
+            llm.callbacks = [streaming_handler]
+            ai_msg = llm.invoke(messages)
+            improved_solution = ai_msg.content
+            
+        elif isinstance(llm, Replicate):
+            # For Replicate, use the same approach as in generate_code_solution
+            formatted_feedback_prompt = "System: You are an expert Python developer tasked with improving code based on user feedback.\n\nHuman: " + feedback_prompt + "\n\nAssistant:"
+            
+            # Set up callbacks for streaming
+            llm.callbacks = [streaming_handler]
+            improved_solution = llm.invoke(formatted_feedback_prompt)
+            
+        else:
+            # For OpenAI and Anthropic
+            messages = [
+                SystemMessage(content="You are an expert Python developer tasked with improving code based on user feedback."),
+                HumanMessage(content=feedback_prompt)
+            ]
+            # Enable streaming
+            llm.callbacks = [streaming_handler]
+            response = llm.invoke(messages)
+            improved_solution = response.content
+        
+        # Clean and format the improved solution
+        final_code = clean_code_from_timestamps(improved_solution)
+        
+        # Check if the solution is wrapped in a code block
+        if not (final_code.startswith("```python") or final_code.startswith("```")):
+            # Wrap it in a code block for consistency
+            final_code = f"```python\n{final_code}\n```"
+        
+        if client:
+            client.close()
+        
+        return final_code
+        
+    except Exception as e:
+        st.session_state.progress_status = f"Error processing feedback: {e}"
+        if client:
+            client.close()
+        return f"Error processing feedback: {e}"
 
 # Chat message display
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Display progress status if exists
+if st.session_state.progress_status:
+    st.info(st.session_state.progress_status)
+
 # Display code solution if available
 if st.session_state.code_solution:
     with st.expander("Generated Code Solution", expanded=True):
-        st.code(st.session_state.code_solution, language="python")
+        # Extract code from markdown code blocks if present
+        code_pattern = r'```(?:python|py)(.*?)```'
+        code_matches = re.findall(code_pattern, st.session_state.code_solution, re.DOTALL)
+        
+        if code_matches:
+            # Display the code part only
+            st.code(code_matches[0].strip(), language="python")
+        else:
+            # If no code block markers, display as is
+            st.code(clean_code_from_timestamps(st.session_state.code_solution), language="python")
 
 # User input area
 if prompt := st.chat_input("What would you like me to build?"):
@@ -1003,6 +1170,7 @@ if prompt := st.chat_input("What would you like me to build?"):
             message_placeholder.markdown("I've updated the solution based on your feedback. Check the code panel above.")
         else:
             # Process new request
+            message_placeholder.markdown("I'm working on your request...")
             response = process_request(prompt)
             st.session_state.code_solution = response
             message_placeholder.markdown("I've generated a solution for your task. Check the code panel above.")
@@ -1015,6 +1183,9 @@ if prompt := st.chat_input("What would you like me to build?"):
     
     # Reset processing flag
     st.session_state.processing = False
+    
+    # Force a rerun to update the UI with the new code
+    st.rerun()
 
 # Show database connection error if any
 if "db_connection_error" in st.session_state and st.session_state.db_connection_error:
@@ -1024,4 +1195,5 @@ if "db_connection_error" in st.session_state and st.session_state.db_connection_
 if st.button("Start New Task"):
     st.session_state.messages = []
     st.session_state.code_solution = ""
+    st.session_state.progress_status = ""
     st.rerun()
