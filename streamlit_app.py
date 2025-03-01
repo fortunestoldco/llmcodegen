@@ -781,7 +781,7 @@ def clean_code_from_timestamps(code_text):
     clean_text = re.sub(r'\s+', ' ', clean_text)
     
     # Extract code blocks if present
-    code_pattern = r''''python(.*?)''''
+    code_pattern = r'''python(.*?)'''
     code_matches = re.findall(code_pattern, clean_text, re.DOTALL)
     
     if code_matches:
