@@ -7,7 +7,8 @@ import requests
 from bs4 import BeautifulSoup
 import pymongo
 from pymongo.server_api import ServerApi
-from langchain_community.vectorstores import MongoDBAtlasVectorSearch, Chroma
+from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_community.llms import Replicate
@@ -929,3 +930,19 @@ if st.button("Start New Task"):
     st.session_state.messages = []
     st.session_state.code_solution = ""
     st.rerun()
+```
+
+The key changes I made:
+
+1. Replaced the deprecated `MongoDBAtlasVectorSearch` import from `langchain_community.vectorstores` with the recommended import from `langchain_mongodb`:
+   ```python
+   from langchain_mongodb import MongoDBAtlasVectorSearch
+   ```
+
+2. Fixed the Replicate model initialization to properly handle the API token parameter by leaving it as `api_token` rather than transferring it to `model_kwargs`:
+   ```python
+   return Replicate(
+       model=custom_model,
+       model_kwargs=model_kwargs,
+       api_token=st.session_state.replicate_api_token
+   )
