@@ -39,13 +39,33 @@ if "code_solution" not in st.session_state:
     st.session_state.code_solution = ""
 if "chroma_db_path" not in st.session_state:
     st.session_state.chroma_db_path = "./chroma_db"
+if "openai_api_key" not in st.session_state:
+    st.session_state.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+if "anthropic_api_key" not in st.session_state:
+    st.session_state.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+if "replicate_api_token" not in st.session_state:
+    st.session_state.replicate_api_token = os.environ.get("REPLICATE_API_TOKEN", "")
+if "huggingface_api_token" not in st.session_state:
+    st.session_state.huggingface_api_token = os.environ.get("HUGGINGFACEHUB_API_TOKEN", "")
 
 # Sidebar for configuration
 with st.sidebar:
     st.header("Model Configuration")
     llm_provider = st.selectbox(
         "Generative Model",
-        ["OpenAI GPT-4o", "OpenAI o1-Preview", "Anthropic Claude 3.7 Sonnet", "Anthropic Claude 3.5 Latest", "Replicate Model", "HuggingFace Hub"]
+        [
+            "OpenAI GPT-4o", 
+            "OpenAI GPT-4.5 Preview", 
+            "OpenAI GPT-4o-mini", 
+            "OpenAI o1", 
+            "OpenAI o1-preview",
+            "OpenAI o1-mini",
+            "OpenAI o3-mini",
+            "Anthropic Claude 3.7 Sonnet", 
+            "Anthropic Claude 3.5 Latest", 
+            "Replicate Model", 
+            "HuggingFace Hub"
+        ]
     )
     
     # Show model name input field only for Replicate and HuggingFace
@@ -54,24 +74,69 @@ with st.sidebar:
         custom_model = st.text_input("Model", 
                                     value="meta/meta-llama-3-8b-instruct" if llm_provider == "Replicate Model" else "HuggingFaceH4/zephyr-7b-beta",
                                     key="custom_model")
+    
+    # Credentials section
+    with st.expander("Credentials", expanded=False):
+        # OpenAI API Key
+        openai_api_key = st.text_input(
+            "OpenAI API Key", 
+            value=st.session_state.openai_api_key,
+            type="password",
+            help="Required for OpenAI models"
+        )
+        if openai_api_key:
+            st.session_state.openai_api_key = openai_api_key
+            os.environ["OPENAI_API_KEY"] = openai_api_key
         
-        # Add API key input for the respective service
-        if llm_provider == "Replicate Model" and not os.environ.get("REPLICATE_API_TOKEN"):
-            replicate_api_key = st.text_input("Replicate API Key", type="password", key="replicate_api_key")
-            if replicate_api_key:
-                os.environ["REPLICATE_API_TOKEN"] = replicate_api_key
+        # Anthropic API Key
+        anthropic_api_key = st.text_input(
+            "Anthropic API Key", 
+            value=st.session_state.anthropic_api_key,
+            type="password",
+            help="Required for Anthropic models"
+        )
+        if anthropic_api_key:
+            st.session_state.anthropic_api_key = anthropic_api_key
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_api_key
         
-        if llm_provider == "HuggingFace Hub" and not os.environ.get("HUGGINGFACEHUB_API_TOKEN"):
-            hf_api_key = st.text_input("HuggingFace API Key", type="password", key="hf_api_key")
-            if hf_api_key:
-                os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_api_key
+        # Replicate API Token
+        replicate_api_token = st.text_input(
+            "Replicate Access Token", 
+            value=st.session_state.replicate_api_token,
+            type="password",
+            help="Required for Replicate models"
+        )
+        if replicate_api_token:
+            st.session_state.replicate_api_token = replicate_api_token
+            os.environ["REPLICATE_API_TOKEN"] = replicate_api_token
+        
+        # HuggingFace API Token
+        huggingface_api_token = st.text_input(
+            "HuggingFace Access Token", 
+            value=st.session_state.huggingface_api_token,
+            type="password",
+            help="Required for HuggingFace models"
+        )
+        if huggingface_api_token:
+            st.session_state.huggingface_api_token = huggingface_api_token
+            os.environ["HUGGINGFACEHUB_API_TOKEN"] = huggingface_api_token
 
 # Function to get the appropriate LLM based on user selection
 def get_llm(provider, temperature=0.2):
     if provider == "OpenAI GPT-4o":
         return ChatOpenAI(model="gpt-4o-latest", temperature=temperature)
-    elif provider == "OpenAI o1-Preview":
+    elif provider == "OpenAI GPT-4.5 Preview":
+        return ChatOpenAI(model="gpt-4.5-preview", temperature=temperature)
+    elif provider == "OpenAI GPT-4o-mini":
+        return ChatOpenAI(model="gpt-4o-mini", temperature=temperature)
+    elif provider == "OpenAI o1":
+        return ChatOpenAI(model="o1", temperature=temperature)
+    elif provider == "OpenAI o1-preview":
         return ChatOpenAI(model="o1-preview", temperature=temperature)
+    elif provider == "OpenAI o1-mini":
+        return ChatOpenAI(model="o1-mini", temperature=temperature)
+    elif provider == "OpenAI o3-mini":
+        return ChatOpenAI(model="o3-mini", temperature=temperature)
     elif provider == "Anthropic Claude 3.7 Sonnet":
         return ChatAnthropic(model="claude-3-7-sonnet-20250219", temperature=temperature)
     elif provider == "Anthropic Claude 3.5 Latest":
