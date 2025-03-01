@@ -23,7 +23,7 @@ import time
 import getpass
 
 # Set page config
-st.set_page_config(page_title="LLM Python Solution Builder", page_icon="🧩", layout="wide")
+st.set_page_config(page_title="Other Tales CodeGen", page_icon="🧩", layout="wide")
 
 # App title and description
 st.title("SDK Code Generator")
