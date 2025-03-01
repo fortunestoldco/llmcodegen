@@ -1,1 +1,12 @@
 streamlit
+requests
+beautifulsoup4
+pymongo
+langchain
+langchain-community
+langchain-openai
+langchain-anthropic
+langchain-huggingface
+openai
+replicate
+chromadb
