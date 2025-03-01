@@ -27,7 +27,7 @@ st.set_page_config(page_title="LLM Python Solution Builder", page_icon="🧩", l
 st.title("SDK Code Generator")
 st.markdown("""
 This tool helps you generate Python code solutions, checking it against the latest SDK documentation. 
-Provide your task in the format: 'Using the Latest Python SDK at [URL], [task]'
+Simply provide your task along with the SDK URL(s) you want to use.
 """)
 
 # Initialize session state variables
@@ -577,6 +577,28 @@ def generate_code_solution(task, vector_results, structured_docs):
         st.error(f"Error generating solution: {e}")
         return f"Error generating solution: {e}"
 
+# Function to extract URLs from text
+def extract_urls(text):
+    # Regular expression pattern to find URLs
+    url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
+    return re.findall(url_pattern, text)
+
+# Function to extract task from text
+def extract_task(text, urls):
+    # Remove URLs from text to get the task
+    task_text = text
+    for url in urls:
+        task_text = task_text.replace(url, "")
+    
+    # Clean up the task text
+    task_text = re.sub(r'\s+', ' ', task_text).strip()
+    
+    # Remove common prefixes like "Using the SDK" or "build a" if present
+    task_text = re.sub(r'^(?:Using|using)\s+(?:the|latest)?\s*(?:SDK|Python SDK|API)(?:\s+at)?\s*,?\s*', '', task_text, flags=re.IGNORECASE)
+    task_text = re.sub(r'^(?:build|create|implement|develop|code)(?:\s+a|\s+an)?\s*', '', task_text, flags=re.IGNORECASE)
+    
+    return task_text.strip()
+
 # Function to process a user request
 def process_request(request):
     vector_store_type = get_vector_store_type()
@@ -587,45 +609,52 @@ def process_request(request):
         if not client:
             return "Failed to connect to the database. Please try again."
     
-    # Extract URL and task from the request
-    url_match = re.search(r'at\s+(https?://\S+),\s+build', request)
-    if not url_match:
-        return "Could not identify the SDK URL in your request. Please use the format 'Using the Latest Python SDK at [URL], build a [task]'."
+    # Extract URLs from the request
+    urls = extract_urls(request)
     
-    url = url_match.group(1)
+    if not urls:
+        return "Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation."
     
-    # Extract task
-    task_match = re.search(r'build\s+(.+)', request)
-    if not task_match:
-        return "Could not identify the task in your request. Please use the format 'Using the Latest Python SDK at [URL], build a [task]'."
+    # Extract task from the request
+    task = extract_task(request, urls)
     
-    task = task_match.group(1)
+    if not task:
+        return "Could not identify the task in your request. Please describe what you want to build."
     
-    # Extract library name from URL if possible
-    library_match = re.search(r'//([^/]+\.)?([^./]+)\.(io|com|org)', url)
-    library = library_match.group(2) if library_match else None
+    # Process each URL
+    all_vector_results = []
+    all_structured_docs = []
     
-    # Check if we already have documentation for this library
-    vector_results, structured_docs = search_documentation(client, task, library)
-    
-    # If we don't have enough relevant results, scrape the documentation
-    if len(vector_results) < 3 or not structured_docs:
-        st.info("Scraping SDK documentation... This may take a moment.")
-        documentation, vector_docs = scrape_documentation(url)
+    for url in urls:
+        # Extract library name from URL if possible
+        library_match = re.search(r'//([^/]+\.)?([^./]+)\.(io|com|org)', url)
+        library = library_match.group(2) if library_match else None
         
-        if documentation and vector_docs:
-            store_result = store_documentation(client, documentation, vector_docs)
-            if store_result:
-                st.success("Documentation scraped and stored successfully!")
-            else:
-                st.warning("Documentation was scraped but could not be stored completely.")
+        # Check if we already have documentation for this library
+        vector_results, structured_docs = search_documentation(client, task, library)
+        
+        # If we don't have enough relevant results, scrape the documentation
+        if len(vector_results) < 3 or not structured_docs:
+            st.info(f"Scraping SDK documentation from {url}... This may take a moment.")
+            documentation, vector_docs = scrape_documentation(url)
             
-            # Search again with the new documentation
-            vector_results, structured_docs = search_documentation(client, task, library)
+            if documentation and vector_docs:
+                store_result = store_documentation(client, documentation, vector_docs)
+                if store_result:
+                    st.success(f"Documentation from {url} scraped and stored successfully!")
+                else:
+                    st.warning(f"Documentation from {url} was scraped but could not be stored completely.")
+                
+                # Search again with the new documentation
+                vector_results, structured_docs = search_documentation(client, task, library)
+        
+        # Add results to our collections
+        all_vector_results.extend(vector_results)
+        all_structured_docs.extend(structured_docs)
     
     # Generate the code solution
     st.info("Generating code solution...")
-    solution = generate_code_solution(task, vector_results, structured_docs)
+    solution = generate_code_solution(task, all_vector_results, all_structured_docs)
     
     if client:
         client.close()
