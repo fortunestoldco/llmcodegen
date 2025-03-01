@@ -309,23 +309,52 @@ def get_vector_store_type():
 
 # Additional indexes for structured_docs collection
 def create_structured_docs_indexes(db, collection_name):
-    db[collection_name].create_index(
-        [("library", pymongo.ASCENDING), ("version", pymongo.ASCENDING)],
-        unique=True
-    )
-    db[collection_name].create_index(
-        [("last_updated", pymongo.ASCENDING)],
-        expireAfterSeconds=7776000  # 90 days
-    )
-    db[collection_name].create_index([("modules.name", pymongo.ASCENDING)])
-    db[collection_name].create_index([("imports.statement", pymongo.ASCENDING)])
+    try:
+        # Compound index for library and version
+        db[collection_name].create_index(
+            [("library", pymongo.ASCENDING), ("version", pymongo.ASCENDING)],
+            unique=True,
+            background=True
+        )
+        
+        # TTL index for automatic cleanup
+        db[collection_name].create_index(
+            [("last_updated", pymongo.ASCENDING)],
+            expireAfterSeconds=7776000,  # 90 days
+            background=True
+        )
+        
+        # Supporting indexes
+        db[collection_name].create_index(
+            [("modules.name", pymongo.ASCENDING)],
+            background=True
+        )
+        db[collection_name].create_index(
+            [("imports.statement", pymongo.ASCENDING)],
+            background=True
+        )
+    except Exception as e:
+        st.warning(f"Warning: Could not create all indexes for {collection_name}: {e}")
 
 # Additional indexes for vector_docs collection
 def create_vector_docs_indexes(db, collection_name):
-    db[collection_name].create_index(
-        [("metadata.library", pymongo.ASCENDING), ("metadata.version", pymongo.ASCENDING)]
-    )
-    db[collection_name].create_index([("page_content", pymongo.TEXT)])
+    try:
+        # Compound index for metadata
+        db[collection_name].create_index(
+            [
+                ("metadata.library", pymongo.ASCENDING),
+                ("metadata.version", pymongo.ASCENDING)
+            ],
+            background=True
+        )
+        
+        # Full-text search index
+        db[collection_name].create_index(
+            [("page_content", "text")],
+            background=True
+        )
+    except Exception as e:
+        st.warning(f"Warning: Could not create all indexes for {collection_name}: {e}")
 
 # MongoDB connection setup
 def get_mongodb_connection():
@@ -365,38 +394,34 @@ def get_mongodb_connection():
             
             # Check if collections exist, if not create them
             if mongo_structured_collection not in db.list_collection_names():
-                # Create structured docs collection with clustered index
+                # Create structured docs collection with default _id clustering
                 db.create_collection(
                     mongo_structured_collection,
                     clusteredIndex={
-                        "key": { "library": 1, "version": 1 },
+                        "key": { "_id": 1 },
                         "unique": True
                     }
                 )
-                # Create regular index on last_updated field
-                db[mongo_structured_collection].create_index(
-                    [("last_updated", pymongo.ASCENDING)],
-                    expireAfterSeconds=7776000  # 90 days
-                )
             
             if mongo_vector_collection not in db.list_collection_names():
-                # Create vector docs collection with capped size and clustered index
+                # Create vector docs collection with default _id clustering
                 db.create_collection(
                     mongo_vector_collection,
                     capped=True,
                     size=5368709120,  # 5GB
                     max=1000000,      # 1 million documents
                     clusteredIndex={
-                        "key": { "metadata.library": 1, "metadata.version": 1 }
+                        "key": { "_id": 1 }
                     }
                 )
             
-            # Create indexes
+            # Create standard indexes for efficient querying
             create_structured_docs_indexes(db, mongo_structured_collection)
             create_vector_docs_indexes(db, mongo_vector_collection)
             
             st.session_state.db_connection_error = None
             return client
+            
         else:
             st.session_state.db_connection_error = None
             return None
