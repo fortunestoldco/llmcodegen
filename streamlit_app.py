@@ -399,19 +399,20 @@ def get_mongodb_connection():
                     mongo_structured_collection,
                     clusteredIndex={
                         "key": { "_id": 1 },
-                        "unique": True
+                        "unique": True  # Required field for clustered index
                     }
                 )
             
             if mongo_vector_collection not in db.list_collection_names():
-                # Create vector docs collection with default _id clustering
+                # Create vector docs collection with default _id clustering and capped size
                 db.create_collection(
                     mongo_vector_collection,
                     capped=True,
                     size=5368709120,  # 5GB
                     max=1000000,      # 1 million documents
                     clusteredIndex={
-                        "key": { "_id": 1 }
+                        "key": { "_id": 1 },
+                        "unique": True  # Required field for clustered index
                     }
                 )
             
