@@ -11,3 +11,4 @@ langchain-mongodb
 openai
 replicate
 chromadb
+firecrawl-py
