@@ -833,7 +833,7 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
         # If code is detected, show it properly formatted
         if self.code_detected:
             # Try to extract the code block
-            code_pattern = r''''(?:python|py)(.*?)''''
+            code_pattern = r'''(?:python|py)(.*?)'''
             code_matches = re.findall(code_pattern, self.text, re.DOTALL)
             
             if code_matches:
@@ -859,7 +859,7 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
     def on_llm_end(self, response, **kwargs):
         # Final cleanup and processing
         # Extract code block if present
-        code_pattern = r''''(?:python|py)(.*?)''''
+        code_pattern = r'''(?:python|py)(.*?)'''
         code_matches = re.findall(code_pattern, self.text, re.DOTALL)
         
         if code_matches:
@@ -1283,7 +1283,7 @@ if st.session_state.progress_status:
 if st.session_state.code_solution:
     with st.expander("Generated Code Solution", expanded=True):
         # Extract code from markdown code blocks if present
-        code_pattern = r''''(?:python|py)(.*?)''''
+        code_pattern = r'''(?:python|py)(.*?)'''
         code_matches = re.findall(code_pattern, st.session_state.code_solution, re.DOTALL)
         
         if code_matches:
