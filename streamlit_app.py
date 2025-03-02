@@ -488,7 +488,7 @@ def update_progress(message, level="info"):
     st.session_state.progress_status = message
     st.session_state.progress_details.append({"time": timestamp, "message": message, "level": level})
 
-# FIXED: Modified to properly handle URL paths
+# Parse URL path for SDK documentation
 def parse_sdk_url_path(url):
     """Extract SDK path for proper documentation fetching."""
     parsed_url = urlparse(url)
@@ -514,7 +514,7 @@ def parse_sdk_url_path(url):
 def scrape_documentation(url):
     update_progress(f"Starting documentation crawl for {url}...")
     
-    # FIXED: Parse the URL path to extract the SDK information
+    # Parse the URL path to extract the SDK information
     sdk_path = parse_sdk_url_path(url)
     update_progress(f"Extracted SDK path: {sdk_path}")
     
@@ -527,7 +527,6 @@ def scrape_documentation(url):
             
             update_progress(f"Using Firecrawl to crawl {url}...")
             
-            # Fixed the issue with datetime
             loader = FireCrawlLoader(
                 api_key=st.session_state.firecrawl_api_key,
                 url=url,
@@ -641,7 +640,6 @@ def process_api_content(content):
     
     return content.strip()
 
-# Add missing function that was referenced but not defined
 def create_structured_documentation(processed_docs):
     """Convert processed document chunks into structured documentation."""
     # Extract basic library info
@@ -684,7 +682,7 @@ def extract_library_info(docs):
         
         # Try to find version
         version_patterns = [
-            r'version\s*[=:]\s*([\d\.]+)',  # Add 'r' prefix
+            r'version\s*[=:]\s*([\d\.]+)',
             r'v([\d\.]+)',
             r'Version\s+([\d\.]+)'
         ]
@@ -749,7 +747,7 @@ def extract_methods(content, class_name):
     method_pattern = r'def\s+(\w+)\s*\((self,?\s*[^)]*)\)[^:]*:(.*?)(?=\n\s*def|\Z)'
     for match in re.finditer(method_pattern, content, re.DOTALL):
         method_name = match.group(1)
-        parameters = match.group(2)  # Now properly escaped
+        parameters = match.group(2)
         method_body = match.group(3)
         
         # Parse docstring if present
@@ -777,7 +775,6 @@ def extract_methods(content, class_name):
         
     return methods
 
-# Add missing function for extracting return info
 def extract_return_info(docstring):
     """Extract return type and description from docstring."""
     return_info = {"type": "None", "description": ""}
@@ -1226,9 +1223,6 @@ def clean_code_from_timestamps(code_text):
     pattern = r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+\]'
     clean_text = re.sub(pattern, '', code_text)
     
-    # Clean up extra whitespace
-    clean_text = re.sub(r'\s+', ' ', clean_text)
-    
     # Extract code blocks if present
     code_pattern = r'''(?:python|py)(.*?)'''
     code_matches = re.findall(code_pattern, clean_text, re.DOTALL)
@@ -1290,8 +1284,10 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
                 explanation_text = self.text.split("'''python")[0] if "'''python" in self.text else self.text.split("'''py")[0]
                 self.container.markdown(explanation_text)
                 
-                # Show the code in a dedicated code block with fixed height
-                self.container.code(code_matches[-1].strip(), language="python")
+                # Show the code in a dedicated code block with proper formatting
+                # FIX: Use code with language parameter to preserve formatting
+                code_content = code_matches[-1].strip()
+                self.container.code(code_content, language="python")
                 
                 # Show any text that follows the code block
                 if "'''" in self.text:
@@ -1396,7 +1392,7 @@ def verify_code_quality(code_text):
     
     return issues
 
-# FIXED: Completely revised to properly format documentation for the LLM
+# Function to generate code solution with proper formatting
 def generate_code_solution(task, vector_results, structured_docs):
     try:
         update_progress("Generating code solution...")
@@ -1495,7 +1491,7 @@ def generate_code_solution(task, vector_results, structured_docs):
             update_progress("Could not initialize the language model. Please check your API keys.", "error")
             return "Error: Could not initialize the language model. Please check your API keys."
         
-        # FIXED: Create a clearer code generation prompt that isolates the task from URL
+        # Create a clearer code generation prompt that isolates the task from URL
         # and provides documentation in a structured way
         code_prompt = f"""
         You are an expert Python developer tasked with generating code based on SDK documentation.
@@ -1624,13 +1620,13 @@ def generate_code_solution(task, vector_results, structured_docs):
         update_progress(f"Error generating solution: {e}", "error")
         return f"Error generating solution: {e}"
 
-# FIXED: Modified to properly separate URLs from tasks
+# Function to extract URLs from text
 def extract_urls(text):
     # Regular expression pattern to find URLs
     url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
     return re.findall(url_pattern, text)
 
-# FIXED: Improved task extraction
+# Function to extract task from text
 def extract_task(text, urls):
     # Remove URLs from text to get the task
     task_text = text
@@ -1644,7 +1640,7 @@ def extract_task(text, urls):
     task_text = re.sub(r'^(?:Using|using)\s+(?:the|latest)?\s*(?:documentation|SDK|Python SDK|API)(?:\s+at)?\s*,?\s*', '', task_text, flags=re.IGNORECASE)
     task_text = re.sub(r'^(?:build|create|implement|develop|code)(?:\s+a|\s+an)?\s*', '', task_text, flags=re.IGNORECASE)
     
-    # FIXED: Handle paths that were mistakenly added to the task
+    # Handle paths that were mistakenly added to the task
     task_text = re.sub(r'^/[\w-]+/[\w-]+,?\s*', '', task_text)
     
     return task_text.strip()
@@ -1675,7 +1671,7 @@ def process_request(request):
     urls = extract_urls(request)
     
     if not urls:
-        # FIXED: Added proper URL extraction for paths like /develop/api-reference
+        # Added proper URL extraction for paths like /develop/api-reference
         path_matches = re.findall(r'/[\w-]+/[\w-]+', request)
         if path_matches:
             update_progress(f"Found path reference: {path_matches[0]}, attempting to convert to full URL")
@@ -1814,7 +1810,7 @@ def process_feedback(feedback, original_solution):
         update_display_progress()
         return "Error: Could not initialize the language model. Please check your API keys."
     
-    # FIXED: Improve documentation formatting for feedback
+    # Improve documentation formatting for feedback
     vector_chunks = ""
     for i, doc in enumerate(vector_results):
         vector_chunks += f"--- DOCUMENTATION CHUNK {i+1} ---\n"
@@ -1975,34 +1971,14 @@ if st.session_state.code_solution:
         code_matches = re.findall(code_pattern, st.session_state.code_solution, re.DOTALL)
         
         if code_matches:
-            # Display the code part only with fixed height
-            st.markdown("""
-            <style>
-            .fixed-height-code {
-                height: 400px;
-                overflow: auto;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            # Use the fixed height class for the code block
-            st.markdown('<div class="fixed-height-code">', unsafe_allow_html=True)
-            st.code(code_matches[0].strip(), language="python")
-            st.markdown('</div>', unsafe_allow_html=True)
+            # Fix: Properly format code with proper line breaks
+            code_content = code_matches[0].strip()
+            # Use st.code to preserve formatting
+            st.code(code_content, language="python")
         else:
-            # If no code block markers, display as is with fixed height
-            st.markdown("""
-            <style>
-            .fixed-height-code {
-                height: 400px;
-                overflow: auto;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            st.markdown('<div class="fixed-height-code">', unsafe_allow_html=True)
-            st.code(clean_code_from_timestamps(st.session_state.code_solution), language="python")
-            st.markdown('</div>', unsafe_allow_html=True)
+            # If no code block markers, display as is
+            clean_code = clean_code_from_timestamps(st.session_state.code_solution)
+            st.code(clean_code, language="python")
 
 # User input area
 if prompt := st.chat_input("What would you like me to build?"):
