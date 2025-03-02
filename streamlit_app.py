@@ -81,7 +81,7 @@ with st.sidebar:
     custom_model = None
     if llm_provider in ["Replicate Model", "HuggingFace Hub"]:
         custom_model = st.text_input("Model", 
-                                    value="meta/meta-llama-3-8b-instruct" if llm_provider == "Replicate Model" else "HuggingFaceH4/zephyr-7b-beta",
+                                    value="anthropic/claude-3.7-sonnet" if llm_provider == "Replicate Model" else "HuggingFaceH4/zephyr-7b-beta",
                                     key="custom_model")
     
     # Credentials section
@@ -555,6 +555,13 @@ def scrape_documentation(url):
             update_progress("Starting API documentation crawl...")
             docs = loader.load()
             
+            if docs:
+                update_progress(f"FireCrawl found {len(docs)} pages, analyzing content...")
+                # Log the first few URLs found
+                for i, doc in enumerate(docs[:3]):
+                    if i == 0:
+                        update_progress(f"Sample URLs found: {doc.metadata.get('source', 'unknown')}")
+            
             if not docs:
                 update_progress("No documentation found, falling back to basic scraping", "warning")
                 return fallback_scrape_documentation(url)
@@ -951,8 +958,8 @@ def store_documentation(client, documentation, vector_docs):
                 })
                 update_progress("Vector search index created/verified")
             except Exception as e:
-                update_progress(f"Error creating vector search index: {e}", "error")
-                return False
+                update_progress(f"Warning: Vector index creation failed: {str(e)}", "warning")
+                # Continue anyway as the index might already exist
 
             # Store the structured documentation
             doc_collection = db[config["structured_collection"]]
