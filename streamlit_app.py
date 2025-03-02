@@ -488,9 +488,35 @@ def update_progress(message, level="info"):
     st.session_state.progress_status = message
     st.session_state.progress_details.append({"time": timestamp, "message": message, "level": level})
 
+# FIXED: Modified to properly handle URL paths
+def parse_sdk_url_path(url):
+    """Extract SDK path for proper documentation fetching."""
+    parsed_url = urlparse(url)
+    
+    # Remove any potential prefix like /develop/api-reference
+    path = parsed_url.path.lstrip('/')
+    
+    # Split by slashes to get path components
+    path_components = path.split('/')
+    
+    # Check if there are path prefixes that aren't part of the actual SDK path
+    prefix_patterns = ['develop', 'api-reference', 'docs', 'reference', 'api']
+    
+    # Filter out common prefixes
+    sdk_path_components = [comp for comp in path_components if comp.lower() not in prefix_patterns]
+    
+    # Reconstruct the SDK path
+    sdk_path = '/'.join(sdk_path_components)
+    
+    return sdk_path.strip('/')
+
 # Function to scrape the SDK documentation using Firecrawl or fallback to BeautifulSoup
 def scrape_documentation(url):
     update_progress(f"Starting documentation crawl for {url}...")
+    
+    # FIXED: Parse the URL path to extract the SDK information
+    sdk_path = parse_sdk_url_path(url)
+    update_progress(f"Extracted SDK path: {sdk_path}")
     
     if st.session_state.firecrawl_api_key:
         try:
@@ -1117,33 +1143,34 @@ def search_documentation(client, query, library=None):
             return [], []
             
         if vector_store_type == "mongodb":
-            db = client['sdk_documentation']
+            config = st.session_state.mongodb_config
+            db = client[config["database"]]
             
             # Search in vector store
-            vector_collection = db['vector_docs']
+            vector_collection = db[config["vector_collection"]]
             
             # Create the vector store
             vector_store = MongoDBAtlasVectorSearch(
                 collection=vector_collection,
                 embedding=embeddings,
-                index_name="vector_index",
+                index_name=config["vector_index"],
             )
             
             # Add library filter if provided
-            search_filter = {"library": library} if library else None
+            search_filter = {"metadata.library": library} if library else None
             
             # Search for similar documents
-            results = vector_store.similarity_search(query, k=10, pre_filter=search_filter)
+            results = vector_store.similarity_search(query, k=10, filter=search_filter)
             update_progress(f"Found {len(results)} relevant document chunks")
             
             # Also get the structured documentation
-            structured_collection = db['structured_docs']
+            structured_collection = db[config["structured_collection"]]
             
             # If we have a library, get its specific documentation
             structured_docs = list(structured_collection.find(
                 {"library": library} if library else {}
             ))
-            update_progress(f"Found {len(structed_docs)} structured documentation entries")
+            update_progress(f"Found {len(structured_docs)} structured documentation entries")
         else:
             # Use Chroma for local vector search
             # Load vector store
@@ -1160,7 +1187,7 @@ def search_documentation(client, query, library=None):
                     results = vector_store.similarity_search(
                         query=query,
                         k=10,
-                        filter={"library": library}
+                        filter={"metadata.library": library}
                     )
                 else:
                     update_progress(f"Searching for '{query}' across all libraries")
@@ -1369,7 +1396,7 @@ def verify_code_quality(code_text):
     
     return issues
 
-# Function to generate code solution using the selected model
+# FIXED: Completely revised to properly format documentation for the LLM
 def generate_code_solution(task, vector_results, structured_docs):
     try:
         update_progress("Generating code solution...")
@@ -1381,12 +1408,83 @@ def generate_code_solution(task, vector_results, structured_docs):
                 sdk_name = structured_docs[0]["library"]
                 update_progress(f"Optimizing model parameters for {sdk_name} SDK")
 
-        # Format the vector chunks
-        vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
+        # Format the vector chunks to be readable
+        # Ensure they're properly formatted with clear sections
+        vector_chunks = ""
+        for i, doc in enumerate(vector_results):
+            vector_chunks += f"--- DOCUMENTATION CHUNK {i+1} ---\n"
+            vector_chunks += f"SOURCE: {doc.metadata.get('source', 'Unknown')}\n"
+            vector_chunks += f"{doc.page_content}\n\n"
+        
         update_progress(f"Prepared {len(vector_results)} documentation chunks for context")
         
-        # Format the structured docs
-        structured_docs_str = json.dumps(structured_docs, indent=2)
+        # Format the structured docs to be more readable and usable for the LLM
+        structured_docs_formatted = []
+        for doc in structured_docs:
+            # Extract critical information for the LLM
+            formatted_doc = {
+                "library": doc.get("library", "Unknown"),
+                "version": doc.get("version", "Latest"),
+                "description": doc.get("description", ""),
+                "imports": doc.get("imports", []),
+                "modules": []
+            }
+            
+            # Format modules to be more concise and focused on what the LLM needs
+            for module in doc.get("modules", []):
+                formatted_module = {
+                    "name": module.get("name", ""),
+                    "description": module.get("description", ""),
+                    "methods": []
+                }
+                
+                # Add key methods with their parameters
+                for method in module.get("methods", []):
+                    formatted_module["methods"].append({
+                        "name": method.get("name", ""),
+                        "description": method.get("description", ""),
+                        "parameters": method.get("parameters", []),
+                        "returns": method.get("returns", {"type": "None", "description": ""})
+                    })
+                
+                formatted_doc["modules"].append(formatted_module)
+            
+            structured_docs_formatted.append(formatted_doc)
+        
+        # Format for readability instead of using json.dumps directly
+        structured_docs_str = ""
+        for i, doc in enumerate(structured_docs_formatted):
+            structured_docs_str += f"=== SDK DOCUMENTATION {i+1}: {doc['library']} v{doc['version']} ===\n"
+            structured_docs_str += f"Description: {doc['description']}\n\n"
+            
+            # Format imports in a readable way
+            structured_docs_str += "IMPORT STATEMENTS:\n"
+            for imp in doc.get("imports", []):
+                structured_docs_str += f"- {imp.get('statement', '')}\n"
+            structured_docs_str += "\n"
+            
+            # Format modules
+            structured_docs_str += "MODULES AND CLASSES:\n"
+            for module in doc.get("modules", []):
+                structured_docs_str += f"## {module.get('name', '')}\n"
+                structured_docs_str += f"   {module.get('description', '')}\n\n"
+                
+                # Format methods
+                for method in module.get("methods", []):
+                    structured_docs_str += f"   * {method.get('name', '')}("
+                    
+                    # Format parameters
+                    params = []
+                    for param in method.get("parameters", []):
+                        param_type = param.get("type", "Any")
+                        params.append(f"{param.get('name', '')}: {param_type}")
+                    
+                    structured_docs_str += ", ".join(params)
+                    structured_docs_str += f") -> {method.get('returns', {}).get('type', 'None')}\n"
+                    structured_docs_str += f"     {method.get('description', '')}\n\n"
+            
+            structured_docs_str += "\n\n"
+        
         update_progress(f"Prepared structured documentation for {len(structured_docs)} libraries")
         
         # Get the optimized LLM with task-specific parameters
@@ -1397,9 +1495,10 @@ def generate_code_solution(task, vector_results, structured_docs):
             update_progress("Could not initialize the language model. Please check your API keys.", "error")
             return "Error: Could not initialize the language model. Please check your API keys."
         
-        # Create the code generation prompt
+        # FIXED: Create a clearer code generation prompt that isolates the task from URL
+        # and provides documentation in a structured way
         code_prompt = f"""
-        You are an expert Python developer tasked with generating code based on SDK documentation or API Reference Material.
+        You are an expert Python developer tasked with generating code based on SDK documentation.
         
         USER TASK: {task}
         
@@ -1525,15 +1624,14 @@ def generate_code_solution(task, vector_results, structured_docs):
         update_progress(f"Error generating solution: {e}", "error")
         return f"Error generating solution: {e}"
 
-# Function to extract URLs from text
+# FIXED: Modified to properly separate URLs from tasks
 def extract_urls(text):
     # Regular expression pattern to find URLs
     url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
     return re.findall(url_pattern, text)
 
-# Function to extract task from text
+# FIXED: Improved task extraction
 def extract_task(text, urls):
-    # This is the key function that needs fixing
     # Remove URLs from text to get the task
     task_text = text
     for url in urls:
@@ -1546,7 +1644,9 @@ def extract_task(text, urls):
     task_text = re.sub(r'^(?:Using|using)\s+(?:the|latest)?\s*(?:documentation|SDK|Python SDK|API)(?:\s+at)?\s*,?\s*', '', task_text, flags=re.IGNORECASE)
     task_text = re.sub(r'^(?:build|create|implement|develop|code)(?:\s+a|\s+an)?\s*', '', task_text, flags=re.IGNORECASE)
     
-    # If the task still contains "create a basic RAG agent graph" or similar, that's what we want
+    # FIXED: Handle paths that were mistakenly added to the task
+    task_text = re.sub(r'^/[\w-]+/[\w-]+,?\s*', '', task_text)
+    
     return task_text.strip()
 
 # Function to process a user request
@@ -1573,6 +1673,23 @@ def process_request(request):
     
     # Extract URLs from the request
     urls = extract_urls(request)
+    
+    if not urls:
+        # FIXED: Added proper URL extraction for paths like /develop/api-reference
+        path_matches = re.findall(r'/[\w-]+/[\w-]+', request)
+        if path_matches:
+            update_progress(f"Found path reference: {path_matches[0]}, attempting to convert to full URL")
+            # Attempt to construct a reasonable URL from the path
+            if "langchain" in path_matches[0].lower():
+                urls = ["https://python.langchain.com" + path_matches[0]]
+                update_progress(f"Constructed URL: {urls[0]}")
+            elif "react" in path_matches[0].lower():
+                urls = ["https://react.dev" + path_matches[0]]
+                update_progress(f"Constructed URL: {urls[0]}")
+            else:
+                # Generic domain construction
+                urls = ["https://docs.example.com" + path_matches[0]]
+                update_progress(f"Constructed URL: {urls[0]}")
     
     if not urls:
         update_progress("Could not identify any SDK URLs in your request. Please include at least one URL to the SDK documentation.", "error")
@@ -1697,9 +1814,46 @@ def process_feedback(feedback, original_solution):
         update_display_progress()
         return "Error: Could not initialize the language model. Please check your API keys."
     
-    # Format the vector chunks and structured docs
-    vector_chunks = "\n\n".join([doc.page_content for doc in vector_results])
-    structured_docs_str = json.dumps(structured_docs, indent=2)
+    # FIXED: Improve documentation formatting for feedback
+    vector_chunks = ""
+    for i, doc in enumerate(vector_results):
+        vector_chunks += f"--- DOCUMENTATION CHUNK {i+1} ---\n"
+        vector_chunks += f"SOURCE: {doc.metadata.get('source', 'Unknown')}\n"
+        vector_chunks += f"{doc.page_content}\n\n"
+    
+    # Format structured documentation in a more readable way
+    structured_docs_str = ""
+    for i, doc in enumerate(structured_docs):
+        structured_docs_str += f"=== SDK DOCUMENTATION {i+1}: {doc.get('library', 'Unknown')} v{doc.get('version', 'Latest')} ===\n"
+        structured_docs_str += f"Description: {doc.get('description', '')}\n\n"
+        
+        # Format imports in a readable way
+        structured_docs_str += "IMPORT STATEMENTS:\n"
+        for imp in doc.get("imports", []):
+            structured_docs_str += f"- {imp.get('statement', '')}\n"
+        structured_docs_str += "\n"
+        
+        # Format modules
+        structured_docs_str += "MODULES AND CLASSES:\n"
+        for module in doc.get("modules", []):
+            structured_docs_str += f"## {module.get('name', '')}\n"
+            structured_docs_str += f"   {module.get('description', '')}\n\n"
+            
+            # Format methods
+            for method in module.get("methods", []):
+                structured_docs_str += f"   * {method.get('name', '')}("
+                
+                # Format parameters
+                params = []
+                for param in method.get("parameters", []):
+                    param_type = param.get("type", "Any")
+                    params.append(f"{param.get('name', '')}: {param_type}")
+                
+                structured_docs_str += ", ".join(params)
+                structured_docs_str += f") -> {method.get('returns', {}).get('type', 'None')}\n"
+                structured_docs_str += f"     {method.get('description', '')}\n\n"
+        
+        structured_docs_str += "\n\n"
     
     # Create a placeholder for streaming output
     feedback_container = st.empty()
