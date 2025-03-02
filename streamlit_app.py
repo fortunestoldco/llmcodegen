@@ -350,6 +350,16 @@ def create_structured_docs_indexes(db, collection_name):
             [("imports.statement", pymongo.ASCENDING)],
             background=True
         )
+        
+        # Add index for examples
+        db[collection_name].create_index(
+            [("examples.module", pymongo.ASCENDING)],
+            background=True
+        )
+        db[collection_name].create_index(
+            [("examples.type", pymongo.ASCENDING)],
+            background=True
+        )
     except Exception as e:
         st.warning(f"Warning: Could not create all indexes for {collection_name}: {e}")
 
@@ -481,59 +491,270 @@ def update_progress(message, level="info"):
 
 # Function to scrape the SDK documentation using Firecrawl or fallback to BeautifulSoup
 def scrape_documentation(url):
-    # Update progress status
     update_progress(f"Starting documentation crawl for {url}...")
     
-    # Try to use Firecrawl if API key is available
     if st.session_state.firecrawl_api_key:
         try:
+            # Determine base URL and allowed patterns
+            parsed_url = urlparse(url)
+            base_domain = parsed_url.netloc
+            base_path = parsed_url.path.split('/')[1] if len(parsed_url.path.split('/')) > 1 else ''
+            
             update_progress(f"Using Firecrawl to crawl {url}...")
             
             loader = FireCrawlLoader(
                 api_key=st.session_state.firecrawl_api_key,
                 url=url,
-                mode="crawl"  # Use crawl mode to get all accessible subpages
+                mode="crawl",
+                config={
+                    "max_pages": 100,
+                    "max_depth": 4,
+                    "follow_links": True,
+                    "allowed_patterns": [
+                        f"https?://{base_domain}/{base_path}/.*api.*",
+                        f"https?://{base_domain}/{base_path}/.*reference.*",
+                        f"https?://{base_domain}/{base_path}/.*docs.*",
+                        f"https?://{base_domain}/{base_path}/.*guide.*"
+                    ],
+                    "extract_rules": {
+                        "api_content": {
+                            "selectors": [
+                                "main", 
+                                "article",
+                                ".documentation",
+                                ".api-documentation",
+                                ".reference",
+                                "#main-content"
+                            ]
+                        },
+                        "code_blocks": {
+                            "selectors": [
+                                "pre code",
+                                ".highlight",
+                                ".example-code",
+                                "[class*='language-python']"
+                            ],
+                            "attributes": ["class"]
+                        },
+                        "method_definitions": {
+                            "selectors": [
+                                ".method",
+                                ".function",
+                                "dl.py.method",
+                                "dl.py.function"
+                            ],
+                            "surrounding_text": True
+                        }
+                    },
+                    "custom_headers": {
+                        "User-Agent": "Mozilla/5.0 (compatible; APIDocCrawler/1.0;)"
+                    }
+                }
             )
-            
-            update_progress(f"Firecrawl initiated for {url}. Retrieving content...")
+
+            update_progress("Starting API documentation crawl...")
             docs = loader.load()
             
-            if docs:
-                update_progress(f"Successfully retrieved {len(docs)} documents from Firecrawl")
-                
-                # Extract library name and version from the first document's metadata
-                library_name = "Unknown"
-                library_version = "Latest"
-                
-                if "title" in docs[0].metadata:
-                    title_text = docs[0].metadata["title"]
-                    match = re.search(r'([\w\-]+)', title_text)
-                    if match:
-                        library_name = match.group(1)
-                
-                # Create the documentation object
-                documentation = {
-                    "library": library_name,
-                    "version": library_version,
-                    "modules": [],
-                    "imports": [],
-                    "last_updated": datetime.now().isoformat()
-                }
-                
-                return documentation, docs
-            else:
-                update_progress(f"Firecrawl returned no documents for {url}. Falling back to basic scraping.", "warning")
-                # Fall back to basic scraping
+            if not docs:
+                update_progress("No documentation found, falling back to basic scraping", "warning")
                 return fallback_scrape_documentation(url)
-                
+            
+            # Process the crawled documentation
+            processed_docs = []
+            for doc in docs:
+                # Clean and structure the content
+                cleaned_content = process_api_content(doc.page_content)
+                if cleaned_content:
+                    processed_docs.append(Document(
+                        page_content=cleaned_content,
+                        metadata={
+                            **doc.metadata,
+                            "processed_at": datetime.now(timezone.utc).isoformat()
+                        }
+                    ))
+
+            if processed_docs:
+                update_progress(f"Successfully processed {len(processed_docs)} API documentation pages")
+                return create_structured_documentation(processed_docs), processed_docs
+            else:
+                update_progress("No valid API documentation found, falling back to basic scraping", "warning")
+                return fallback_scrape_documentation(url)
+
         except Exception as e:
-            update_progress(f"Error using Firecrawl: {e}. Falling back to basic scraping.", "error")
-            # Fall back to basic scraping
+            update_progress(f"Firecrawl error: {str(e)}", "error")
             return fallback_scrape_documentation(url)
     else:
-        # Fall back to basic scraping if no Firecrawl API key
         return fallback_scrape_documentation(url)
 
+def process_api_content(content):
+    """Clean and structure API documentation content."""
+    if not content.strip():
+        return None
+        
+    # Remove common noise
+    content = re.sub(r'^\s*>>>\s*', '', content, flags=re.MULTILINE)  # Remove REPL prompts
+    content = re.sub(r'^\s*\.\.\.\s*', '', content, flags=re.MULTILINE)  # Remove REPL continuation
+    content = re.sub(r'\n{3,}', '\n\n', content)  # Normalize whitespace
+    
+    # Identify and mark code blocks
+    content = re.sub(
+        r'```(?:python|py)?(.*?)```',
+        lambda m: f'CODE_BLOCK_START\n{m.group(1).strip()}\nCODE_BLOCK_END',
+        content,
+        flags=re.DOTALL
+    )
+    
+    return content.strip()
+
+def extract_library_info(docs):
+    """Extract library name, version, and description from documentation."""
+    info = {
+        "name": "Unknown",
+        "version": "Latest",
+        "description": ""
+    }
+    
+    for doc in docs:
+        content = doc.page_content
+        metadata = doc.metadata
+        
+        # Look for package info in common locations
+        if "package" in metadata:
+            info["name"] = metadata["package"]
+        
+        # Try to find version
+        version_patterns = [
+            r'version\s*[=:]\s*([\d\.]+)',
+            r'v([\d\.]+)',
+            r'Version\s+([\d\.]+)'
+        ]
+        for pattern in version_patterns:
+            match = re.search(pattern, content)
+            if match:
+                info["version"] = match.group(1)
+                break
+                
+        # Look for package description
+        desc_patterns = [
+            r'"""(.*?)"""',
+            r'Description\s*[-:=]\s*([^\n]+)'
+        ]
+        for pattern in desc_patterns:
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                info["description"] = match.group(1).strip()
+                break
+                
+    return info
+
+def extract_modules(docs):
+    """Extract module information from documentation."""
+    modules = []
+    current_module = None
+    
+    for doc in docs:
+        content = doc.page_content
+        
+        # Look for module definitions
+        module_matches = re.finditer(r'(?:class|module)\s+(\w+)(?:\(([^)]+)\))?\s*:', content)
+        for match in module_matches:
+            module_name = match.group(1)
+            parent_class = match.group(2) if match.groups() > 1 else None
+            
+            # Get module description
+            desc_match = re.search(f'{module_name}\s*(?:\([^)]+\))?\s*:(.*?)(?:class|def|$)', content, re.DOTALL)
+            description = desc_match.group(1).strip() if desc_match else ""
+            
+            # Extract methods and examples
+            methods = extract_methods(content, module_name)
+            examples = extract_examples(content, module_name)
+            
+            modules.append({
+                "name": module_name,
+                "parent_class": parent_class,
+                "description": description,
+                "methods": methods,
+                "examples": examples,  # Add examples to module
+                "classes": [],
+                "source": doc.metadata.get("source", "")
+            })
+    
+    return modules
+
+def extract_methods(content, class_name):
+    """Extract method information from a class definition."""
+    methods = []
+    
+    # Look for method definitions
+    method_pattern = r'def\s+(\w+)\s*\((self,?\s*[^)]*)\)[^:]*:(.*?)(?=\n\s*def|\Z)'
+    for match in re.finditer(method_pattern, content, re.DOTALL):
+        method_name = match.group(1)
+        parameters = match.group(2)
+        method_body = match.group(3)
+        
+        # Parse docstring if present
+        docstring_match = re.search(r'"""(.*?)"""', method_body, re.DOTALL)
+        docstring = docstring_match.group(1).strip() if docstring_match else ""
+        
+        # Parse parameters
+        param_list = []
+        for param in parameters.split(','):
+            param = param.strip()
+            if param and param != 'self':
+                param_parts = param.split(':')
+                param_list.append({
+                    "name": param_parts[0].strip(),
+                    "type": param_parts[1].strip() if len(param_parts) > 1 else "Any",
+                    "description": ""  # Could be extracted from docstring if needed
+                })
+        
+        methods.append({
+            "name": method_name,
+            "description": docstring,
+            "parameters": param_list,
+            "returns": extract_return_info(docstring)
+        })
+        
+    return methods
+
+def extract_examples(content, context_name=None):
+    """Extract example code and usage patterns."""
+    examples = []
+    
+    # Common patterns for finding examples
+    example_patterns = [
+        # Example block with heading
+        r'(?:Example|Usage)[\s\-:]+\s*(```(?:python|py)?\s*[\s\S]*?```)',
+        # Code block with context
+        r'(?:class|def)\s+' + (context_name or r'\w+') + r'[\s\S]*?(```(?:python|py)?\s*[\s\S]*?```)',
+        # General code blocks
+        r'```(?:python|py)?\s*([\s\S]*?)```'
+    ]
+    
+    for pattern in example_patterns:
+        matches = re.finditer(pattern, content, re.DOTALL)
+        for match in matches:
+            example_text = match.group(1).strip()
+            
+            # Clean up the example
+            example_text = re.sub(r'```(?:python|py)?\s*', '', example_text)
+            example_text = example_text.replace('```', '').strip()
+            example_text = re.sub(r'^\s*>>>\s*', '', example_text, flags=re.MULTILINE)
+            
+            # Verify it's a valid code example
+            if any(keyword in example_text for keyword in ['import', 'def', 'class', '=', 'return']):
+                examples.append({
+                    "code": example_text,
+                    "context": context_name or "global",
+                    "type": "example"
+                })
+    
+    return examples
+
+def extract_imports(docs):
+    """Extract import statements and their context."""
+    imports = []
+    seen_imports = set()
 # Fallback scraping function using BeautifulSoup
 def fallback_scrape_documentation(url):
     try:
@@ -708,10 +929,31 @@ def store_documentation(client, documentation, vector_docs):
             return False
             
         if vector_store_type == "mongodb":
-            # Use configuration from session state
             config = st.session_state.mongodb_config
             db = client[config["database"]]
             
+            # Ensure vector search index exists
+            try:
+                db.command({
+                    "createIndexes": config["vector_collection"],
+                    "indexes": [
+                        {
+                            "name": config["vector_index"],
+                            "key": {
+                                "vector": "knnVector"
+                            },
+                            "definition": {
+                                "dimensions": 1536,  # OpenAI embedding dimensions
+                                "similarity": "cosine"
+                            }
+                        }
+                    ]
+                })
+                update_progress("Vector search index created/verified")
+            except Exception as e:
+                update_progress(f"Error creating vector search index: {e}", "error")
+                return False
+
             # Store the structured documentation
             doc_collection = db[config["structured_collection"]]
             
