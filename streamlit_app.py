@@ -1292,6 +1292,83 @@ class StreamlitCallbackHandler(StreamingStdOutCallbackHandler):
         clean_text = clean_code_from_timestamps(self.text)
         return clean_text
 
+# Function to verify code quality and format
+def verify_code_quality(code_text):
+    """Verify code quality and format."""
+    issues = []
+    
+    # Remove code block markers if present
+    if "'''python" in code_text or "'''py" in code_text:
+        code_pattern = r'''(?:python|py)(.*?)'''
+        code_matches = re.findall(code_pattern, code_text, re.DOTALL)
+        if code_matches:
+            code_text = code_matches[0].strip()
+    
+    # 1. Check indentation
+    lines = code_text.split('\n')
+    indent_pattern = r'^( {4})*[^ ]'
+    for i, line in enumerate(lines, 1):
+        if line.strip() and not re.match(indent_pattern, line):
+            issues.append(f"Line {i}: Incorrect indentation. Use 4 spaces for indentation.")
+    
+    # 2. Check regex patterns
+    regex_pattern = r'r[\'"].*?[\'"]'
+    for i, line in enumerate(lines, 1):
+        if 're.' in line or 'regex' in line.lower():
+            # Check for raw string usage
+            if 'r"' not in line and "r'" not in line:
+                issues.append(f"Line {i}: Regex pattern should use raw string (prefix with r)")
+            # Check for escaped characters
+            if '\\' in line and not line.strip().startswith('r'):
+                issues.append(f"Line {i}: Potential regex escape sequence issue")
+    
+    # 3. Check quotation consistency
+    for i, line in enumerate(lines, 1):
+        # Count different quote types
+        single_quotes = line.count("'")
+        double_quotes = line.count('"')
+        if single_quotes % 2 != 0:
+            issues.append(f"Line {i}: Unmatched single quotes")
+        if double_quotes % 2 != 0:
+            issues.append(f"Line {i}: Unmatched double quotes")
+        # Check mixed usage in same line
+        if single_quotes > 0 and double_quotes > 0 and 'r"' not in line and "r'" not in line:
+            issues.append(f"Line {i}: Mixed quote usage - stick to one style")
+    
+    # 4. Check encapsulation
+    brackets = {'(': ')', '[': ']', '{': '}'}
+    for i, line in enumerate(lines, 1):
+        stack = []
+        for char in line:
+            if char in brackets:
+                stack.append(char)
+            elif char in brackets.values():
+                if not stack or char != brackets[stack.pop()]:
+                    issues.append(f"Line {i}: Mismatched brackets")
+                    break
+        if stack:
+            issues.append(f"Line {i}: Unclosed brackets")
+    
+    # 5. Check for unparsable characters
+    unparsable_pattern = r'[^\x00-\x7F]+'
+    for i, line in enumerate(lines, 1):
+        if re.search(unparsable_pattern, line):
+            issues.append(f"Line {i}: Contains non-ASCII characters")
+    
+    # 6. Check formatting
+    for i, line in enumerate(lines, 1):
+        # Check spacing around operators
+        if re.search(r'\w[+\-*/=]=\w', line):
+            issues.append(f"Line {i}: Missing spaces around operators")
+        # Check comma spacing
+        if re.search(r'\w,\w', line):
+            issues.append(f"Line {i}: Missing space after comma")
+        # Check line length
+        if len(line) > 120:
+            issues.append(f"Line {i}: Line too long (exceeds 120 characters)")
+    
+    return issues
+
 # Function to generate code solution using the selected model
 def generate_code_solution(task, vector_results, structured_docs):
     try:
@@ -1399,9 +1476,44 @@ def generate_code_solution(task, vector_results, structured_docs):
         # Extract clean code from solution
         final_code = clean_code_from_timestamps(solution)
         
+        # Verify code quality
+        issues = verify_code_quality(final_code)
+        if issues:
+            update_progress("Code generated, fixing formatting issues...", "warning")
+            # Log issues for debugging
+            for issue in issues:
+                update_progress(f"Fixed: {issue}", "info")
+            
+            # Request the model to fix the issues
+            fix_prompt = f"""
+            The generated code has the following issues that need to be fixed:
+            {chr(10).join(issues)}
+            
+            Please fix these issues while maintaining the same functionality.
+            Original code:
+            {final_code}
+            
+            Provide the corrected code with proper formatting, indentation, and consistent style.
+            """
+            
+            # Get fixed version from the model
+            messages = [
+                SystemMessage(content="You are a Python code formatting expert."),
+                HumanMessage(content=fix_prompt)
+            ]
+            
+            fixed_response = llm.invoke(messages)
+            final_code = clean_code_from_timestamps(fixed_response.content)
+            
+            # Verify fixes
+            remaining_issues = verify_code_quality(final_code)
+            if remaining_issues:
+                update_progress("Some minor formatting issues remain, but code is functional", "warning")
+            else:
+                update_progress("Code formatting issues resolved successfully!")
+        
         # Check if the solution is wrapped in a code block
         if not (final_code.startswith("'''python") or final_code.startswith("'''")):
-            # Wrap it in a code block for consistency
             final_code = f"'''python\n{final_code}\n'''"
         
         # Update status
