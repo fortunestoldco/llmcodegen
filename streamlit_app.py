@@ -293,17 +293,20 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
             st.error("HuggingFace Access Token is required for HuggingFace Hub models. Please provide it in the sidebar.")
             return None
             
-        # For HuggingFace, use specific parameter structure
+        # Move all parameters to model_kwargs to avoid conflicts
+        model_kwargs = {
+            "max_new_tokens": params.get("max_tokens", 512),
+            "temperature": params.get("temperature", 0.2),
+            "top_p": params.get("top_p", 0.95),
+            "do_sample": True
+        }
+            
         llm = HuggingFaceEndpoint(
             repo_id=custom_model,
             task="text-generation",
-            max_new_tokens=params.get("max_tokens", 512),
-            do_sample=params.get("temperature", 0.2) > 0,
-            temperature=params.get("temperature", 0.2),
-            top_p=params.get("top_p", 0.95),
-            repetition_penalty=params.get("repetition_penalty", 1.03),
+            model_kwargs=model_kwargs,
             token=st.session_state.huggingface_api_token,
-            streaming=True  # Enable streaming for real-time updates
+            streaming=True
         )
         return ChatHuggingFace(llm=llm)
     else:
@@ -472,7 +475,7 @@ def get_embeddings():
 
 # Function to update progress with detailed information
 def update_progress(message, level="info"):
-    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    timestamp = datetime.now().strftime("%H:%M:%S")
     st.session_state.progress_status = message
     st.session_state.progress_details.append({"time": timestamp, "message": message, "level": level})
 
@@ -514,7 +517,7 @@ def scrape_documentation(url):
                     "version": library_version,
                     "modules": [],
                     "imports": [],
-                    "last_updated": datetime.datetime.now().isoformat()
+                    "last_updated": datetime.now().isoformat()
                 }
                 
                 return documentation, docs
@@ -659,7 +662,7 @@ def fallback_scrape_documentation(url):
             "version": library_version,
             "modules": modules,
             "imports": imports,
-            "last_updated": datetime.datetime.now().isoformat()
+            "last_updated": datetime.now().isoformat()
         }
         
         # Also create a list of text chunks for vector storage
@@ -680,7 +683,7 @@ def fallback_scrape_documentation(url):
                     "version": library_version,
                     "source": url,
                     "chunk_id": i,
-                    "timestamp": datetime.now(timezone.utc)  # Updated to use timezone-aware UTC
+                    "timestamp": datetime.now(timezone.utc)
                 }
             )
             for i, chunk in enumerate(chunks)
