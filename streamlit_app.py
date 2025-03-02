@@ -723,7 +723,7 @@ def extract_methods(content, class_name):
     method_pattern = r'def\s+(\w+)\s*\((self,?\s*[^)]*)\)[^:]*:(.*?)(?=\n\s*def|\Z)'
     for match in re.finditer(method_pattern, content, re.DOTALL):
         method_name = match.group(1)
-        parameters = match.group(2)
+        parameters = match.group(2)  # Now properly escaped
         method_body = match.group(3)
         
         # Parse docstring if present
@@ -1143,7 +1143,7 @@ def search_documentation(client, query, library=None):
             structured_docs = list(structured_collection.find(
                 {"library": library} if library else {}
             ))
-            update_progress(f"Found {len(structured_docs)} structured documentation entries")
+            update_progress(f"Found {len(structed_docs)} structured documentation entries")
         else:
             # Use Chroma for local vector search
             # Load vector store
