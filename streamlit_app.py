@@ -1,8 +1,7 @@
 import streamlit as st
 import os
-import datetime
-import json
 import re
+import json
 import requests
 from bs4 import BeautifulSoup
 import pymongo
@@ -20,8 +19,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.document_loaders.firecrawl import FireCrawlLoader
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 import time
-import getpass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 # Set page config
 st.set_page_config(page_title="Other Tales CodeMaker", page_icon="🧩", layout="wide")
@@ -502,10 +501,11 @@ def scrape_documentation(url):
             
             update_progress(f"Using Firecrawl to crawl {url}...")
             
+            # Fixed the issue with datetime
             loader = FireCrawlLoader(
                 api_key=st.session_state.firecrawl_api_key,
                 url=url,
-                mode="crawl",
+                mode="crawl",  # Use crawl mode to get all accessible pages
                 config={
                     "max_pages": 100,
                     "max_depth": 4,
@@ -582,7 +582,9 @@ def scrape_documentation(url):
 
             if processed_docs:
                 update_progress(f"Successfully processed {len(processed_docs)} API documentation pages")
-                return create_structured_documentation(processed_docs), processed_docs
+                # Implement the missing function
+                documentation = create_structured_documentation(processed_docs)
+                return documentation, processed_docs
             else:
                 update_progress("No valid API documentation found, falling back to basic scraping", "warning")
                 return fallback_scrape_documentation(url)
@@ -612,6 +614,31 @@ def process_api_content(content):
     )
     
     return content.strip()
+
+# Add missing function that was referenced but not defined
+def create_structured_documentation(processed_docs):
+    """Convert processed document chunks into structured documentation."""
+    # Extract basic library info
+    library_info = extract_library_info(processed_docs)
+    
+    # Extract modules, classes, functions
+    modules = extract_modules(processed_docs)
+    
+    # Extract import statements
+    imports = extract_imports(processed_docs)
+    
+    # Create the structured documentation
+    documentation = {
+        "library": library_info["name"],
+        "version": library_info["version"],
+        "description": library_info["description"],
+        "modules": modules,
+        "imports": imports,
+        "examples": [],  # Will be populated with global examples
+        "last_updated": datetime.now(timezone.utc).isoformat()
+    }
+    
+    return documentation
 
 def extract_library_info(docs):
     """Extract library name, version, and description from documentation."""
@@ -724,6 +751,38 @@ def extract_methods(content, class_name):
         
     return methods
 
+# Add missing function for extracting return info
+def extract_return_info(docstring):
+    """Extract return type and description from docstring."""
+    return_info = {"type": "None", "description": ""}
+    
+    if not docstring:
+        return return_info
+    
+    # Look for common return patterns in docstrings
+    return_patterns = [
+        r'(?:Returns|Return type):\s*(.*?)(?:$|\n)',
+        r'@return:\s*(.*?)(?:$|\n)',
+        r'@rtype:\s*(.*?)(?:$|\n)'
+    ]
+    
+    for pattern in return_patterns:
+        match = re.search(pattern, docstring, re.DOTALL)
+        if match:
+            return_text = match.group(1).strip()
+            
+            # Try to separate type and description
+            parts = return_text.split(' ', 1)
+            if len(parts) > 1:
+                return_info["type"] = parts[0].strip()
+                return_info["description"] = parts[1].strip()
+            else:
+                return_info["type"] = return_text
+            
+            break
+    
+    return return_info
+
 def extract_examples(content, context_name=None):
     """Extract example code and usage patterns."""
     examples = []
@@ -762,6 +821,33 @@ def extract_imports(docs):
     """Extract import statements and their context."""
     imports = []
     seen_imports = set()
+    
+    for doc in docs:
+        content = doc.page_content
+        
+        # Find all import statements
+        import_patterns = [
+            r'^import\s+([^;#\n]+)',
+            r'^from\s+([^;#\n]+)\s+import\s+([^;#\n]+)'
+        ]
+        
+        for pattern in import_patterns:
+            matches = re.finditer(pattern, content, re.MULTILINE)
+            for match in matches:
+                if pattern.startswith(r'^import'):
+                    import_stmt = f"import {match.group(1).strip()}"
+                else:
+                    import_stmt = f"from {match.group(1).strip()} import {match.group(2).strip()}"
+                
+                if import_stmt not in seen_imports:
+                    seen_imports.add(import_stmt)
+                    imports.append({
+                        "statement": import_stmt,
+                        "description": ""
+                    })
+    
+    return imports
+
 # Fallback scraping function using BeautifulSoup
 def fallback_scrape_documentation(url):
     try:
