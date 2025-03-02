@@ -284,7 +284,7 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
             model_kwargs=model_kwargs,
             streaming=True,
             callbacks=[StreamingStdOutCallbackHandler()],
-            api_token=st.session_state.replicate_api_token
+            api_token=st.session_state.replicate_api_token  # Keep api_token separate from model_kwargs
         )
         
     elif provider == "HuggingFace Hub" and custom_model:
@@ -658,7 +658,7 @@ def extract_library_info(docs):
         
         # Try to find version
         version_patterns = [
-            r'version\s*[=:]\s*([\d\.]+)',
+            r'version\s*[=:]\s*([\d\.]+)',  # Add 'r' prefix
             r'v([\d\.]+)',
             r'Version\s+([\d\.]+)'
         ]
@@ -1203,7 +1203,7 @@ def clean_code_from_timestamps(code_text):
     clean_text = re.sub(r'\s+', ' ', clean_text)
     
     # Extract code blocks if present
-    code_pattern = r'''python(.*?)'''
+    code_pattern = r'''(?:python|py)(.*?)'''
     code_matches = re.findall(code_pattern, clean_text, re.DOTALL)
     
     if code_matches:
