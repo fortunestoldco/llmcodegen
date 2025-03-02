@@ -21,6 +21,7 @@ from langchain_community.document_loaders.firecrawl import FireCrawlLoader
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 import time
 import getpass
+from datetime import datetime, timezone
 
 # Set page config
 st.set_page_config(page_title="Other Tales CodeMaker", page_icon="🧩", layout="wide")
@@ -146,9 +147,13 @@ def determine_optimal_parameters(provider, sdk_name):
     default_params = {
         "temperature": 0.2,
         "top_p": 0.95,
-        "max_tokens": 4000,
-        "repetition_penalty": 1.03
+        "max_tokens": 4000
     }
+    
+    # Remove repetition_penalty for models that don't support it
+    if "OpenAI" in provider or "Anthropic" in provider:
+        if "repetition_penalty" in default_params:
+            del default_params["repetition_penalty"]
     
     # Get optimal parameters based on model provider and task
     prompt = f"""
@@ -227,11 +232,20 @@ def get_llm(provider, task=None, sdk_name=None, temperature=0.2):
         elif provider == "OpenAI o3-mini":
             model_name = "o3-mini"
             
+        # Extract only supported parameters
+        model_params = {
+            "temperature": params.get("temperature", 0.2),
+            "top_p": params.get("top_p", 0.95),
+            "max_tokens": params.get("max_tokens", 4000)
+        }
+            
         return ChatOpenAI(
-            model=model_name, 
-            model_kwargs=params, 
+            model=model_name,
+            temperature=model_params["temperature"],
+            top_p=model_params["top_p"],
+            max_tokens=model_params["max_tokens"],
             api_key=st.session_state.openai_api_key,
-            streaming=True  # Enable streaming for real-time updates
+            streaming=True
         )
             
     elif "Anthropic" in provider:
@@ -666,7 +680,7 @@ def fallback_scrape_documentation(url):
                     "version": library_version,
                     "source": url,
                     "chunk_id": i,
-                    "timestamp": datetime.datetime.utcnow()  # Add timestamp field
+                    "timestamp": datetime.now(timezone.utc)  # Updated to use timezone-aware UTC
                 }
             )
             for i, chunk in enumerate(chunks)
